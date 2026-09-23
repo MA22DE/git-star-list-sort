@@ -25,7 +25,12 @@ from pathlib import Path
 from typing import Any
 
 from .credentials import resolve_github_token
-from .github_api import GitHubAPI, paginated_lists
+from .github_api import (
+    GitHubAPI,
+    format_evidence,
+    list_item_details,
+    paginated_lists,
+)
 
 DEFAULT_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
@@ -43,14 +48,17 @@ REQUEST_TOKEN_BUDGET = 2000
 # a single hard title into a slower success rather than an aborted batch.
 MAX_TOKEN_BUDGET = 4000
 PROMPT = (
-    "You are naming the boundaries of a GitHub star List used for classifying "
-    "repositories.\n"
-    "Given the List title, write a description of at most two sentences and at "
-    f"most {MAX_SENTENCES} sentences and at most {MAX_WORDS} words.\n"
-    "The description must state what belongs in the List and, when the title is "
-    "ambiguous next to the sibling Lists, what does not.\n"
+    "You are writing the description of a GitHub star List, which is used as the "
+    "criteria when classifying other repositories into Lists.\n"
+    f"Write at most {MAX_SENTENCES} sentences and at most {MAX_WORDS} words.\n"
+    "State what belongs in this List, and name the sibling Lists it is most "
+    "likely to be confused with and what does not belong here.\n"
+    "Ground the description in the evidence provided: the repositories already "
+    "in the List, their topics, and their languages. Do not invent a theme that "
+    "the evidence does not support, and do not assume a List is about a general "
+    "topic just because its title sounds like one.\n"
     "Reply with the description only: no preamble, no quotes, no markdown, no "
-    "List title repetition.\n"
+    "repetition of the List title.\n"
 )
 
 
@@ -71,7 +79,12 @@ def load_env(path: Path) -> dict[str, str]:
 
 
 def _request_description(
-    title: str, siblings_text: str, api_key: str, model: str, budget: int
+    title: str,
+    siblings_text: str,
+    api_key: str,
+    model: str,
+    budget: int,
+    evidence: str = "",
 ) -> tuple[str | None, str | None]:
     """Ask for one description.
 
@@ -89,6 +102,7 @@ def _request_description(
                 "content": (
                     f"List title: {title}\n"
                     f"Sibling List titles: {siblings_text or '(none)'}\n"
+                    + (f"\n{evidence}" if evidence else "")
                 ),
             },
         ],
@@ -128,7 +142,13 @@ def _request_description(
     return None, reason
 
 
-def describe(title: str, siblings: list[str], api_key: str, model: str) -> str:
+def describe(
+    title: str,
+    siblings: list[str],
+    api_key: str,
+    model: str,
+    evidence: str = "",
+) -> str:
     """Return a short description for one List title.
 
     Reasoning length varies by title: a concrete name like ``SQLite`` answers
@@ -141,7 +161,7 @@ def describe(title: str, siblings: list[str], api_key: str, model: str) -> str:
     reason = "no response"
     while budget <= MAX_TOKEN_BUDGET:
         description, reason = _request_description(
-            title, siblings_text, api_key, model, budget
+            title, siblings_text, api_key, model, budget, evidence
         )
         if description is not None:
             return description
@@ -186,10 +206,13 @@ def generate_partial(
     *,
     existing: dict[str, str] | None = None,
     force: bool = False,
+    evidence: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], list[tuple[str, str]]]:
     """Describe each List, returning successes plus the titles that failed.
 
     One uncooperative title must not discard the descriptions already generated.
+    ``evidence`` maps a List name to the rendered details of its members, which
+    keeps a vague title from being described as a general topic.
     """
     titles = [item["name"] for item in lists]
     descriptions: dict[str, str] = dict(existing or {})
@@ -203,7 +226,9 @@ def generate_partial(
             )
             continue
         try:
-            text = describe(title, titles, api_key, model)
+            text = describe(
+                title, titles, api_key, model, (evidence or {}).get(title, "")
+            )
         except (RuntimeError, ValueError) as error:
             failures.append((title, str(error)))
             print(f"[{index}/{len(titles)}] {title}: FAILED - {error}", file=sys.stderr)
@@ -263,8 +288,24 @@ def run() -> None:
 
         existing = load_descriptions(args.describe_lists_output)
 
+    evidence: dict[str, str] = {}
+    for index, item in enumerate(lists, start=1):
+        details = list_item_details(client, item["id"])
+        evidence[item["name"]] = format_evidence(details)
+        note = "empty" if not details else f"{len(details)} member(s)"
+        print(
+            f"[{index}/{len(lists)}] evidence for {item['name']}: {note}",
+            file=sys.stderr,
+            flush=True,
+        )
+
     descriptions, failures = generate_partial(
-        lists, api_key, model, existing=existing, force=args.force
+        lists,
+        api_key,
+        model,
+        existing=existing,
+        force=args.force,
+        evidence=evidence,
     )
     document = {
         "generated_model": model,

@@ -4,7 +4,9 @@ import contextlib
 import io
 import json
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from git_star_list_sort import credentials
@@ -307,6 +309,78 @@ class SecretRedactionTests(unittest.TestCase):
         with self.assertRaises((RuntimeError, ValueError)) as caught:
             credentials.resolve_github_token({}, run=run)
         self.assertNotIn(GITHUB_SECRET, str(caught.exception))
+
+
+class DotenvTests(unittest.TestCase):
+    """The installed CLI cannot source a shell profile, so it reads .env itself."""
+
+    def test_dotenv_values_are_used_when_the_environment_is_bare(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".env").write_text(
+                f"{credentials.STAR_LISTS_TOKEN_ENV}=from-dotenv\n", encoding="utf-8"
+            )
+            with (
+                mock.patch.object(credentials, "dotenv_enabled", return_value=True),
+                mock.patch.object(
+                    credentials, "config_candidates", return_value=[root / ".env"]
+                ),
+                mock.patch.dict(os.environ, {}, clear=True),
+            ):
+                token, source = credentials.resolve_github_token(
+                    None, include_dotenv=True
+                )
+        self.assertEqual("from-dotenv", token)
+        self.assertIn(credentials.STAR_LISTS_TOKEN_ENV, source)
+
+    def test_real_environment_variables_beat_dotenv(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".env").write_text(
+                f"{credentials.STAR_LISTS_TOKEN_ENV}=from-dotenv\n", encoding="utf-8"
+            )
+            with (
+                mock.patch.object(credentials, "dotenv_enabled", return_value=True),
+                mock.patch.object(
+                    credentials, "config_candidates", return_value=[root / ".env"]
+                ),
+            ):
+                token, _ = credentials.resolve_github_token(
+                    {credentials.STAR_LISTS_TOKEN_ENV: "from-env"}, include_dotenv=True
+                )
+        self.assertEqual("from-env", token)
+
+    def test_dotenv_is_skipped_when_disabled(self):
+        # The opt-out keeps tests and scripted runs reproducible.
+        with mock.patch.dict(os.environ, {credentials.NO_DOTENV_ENV: "1"}, clear=True):
+            self.assertFalse(credentials.dotenv_enabled())
+            self.assertEqual({}, credentials.dotenv_values())
+
+    def test_file_is_parsed_tolerantly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".env"
+            path.write_text(
+                '# comment\n\nKEY=value\nQUOTED="q"\nMALFORMED\n', encoding="utf-8"
+            )
+            values = credentials.load_env_file(path)
+        self.assertEqual("value", values["KEY"])
+        self.assertEqual("q", values["QUOTED"])
+        self.assertNotIn("MALFORMED", values)
+
+    def test_missing_file_is_tolerated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual({}, credentials.load_env_file(Path(directory) / "absent"))
+
+    def test_config_candidates_include_the_user_config_dir(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            candidates = credentials.config_candidates(root)
+            self.assertEqual(
+                Path.home() / ".config" / credentials.APP_NAME / ".env", candidates[-1]
+            )
+            self.assertEqual(root / ".env", candidates[0])
+            # Parents are searched so a .env in a subdirectory still applies.
+            self.assertIn(root.parent / ".env", candidates)
 
 
 if __name__ == "__main__":

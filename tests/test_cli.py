@@ -34,6 +34,8 @@ class EntryPointTests(unittest.TestCase):
             "JEV_API_KEY": "",
             "TYPESAFE_API_KEY": "",
             "JEV_ENDPOINT": "",
+            # The subprocess must not pick up a developer's ~/.config credentials.
+            "GIT_STAR_LIST_SORT_NO_DOTENV": "1",
         }
         env.update(overrides)
         return env

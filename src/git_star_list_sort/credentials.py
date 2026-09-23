@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 from collections.abc import Callable, Mapping
+from pathlib import Path
 
 STAR_LISTS_TOKEN_ENV = "STAR_LISTS_TOKEN"
 GH_TOKEN_ENV = "GH_TOKEN"
@@ -14,6 +15,9 @@ TYPESAFE_API_KEY_ENV = "TYPESAFE_API_KEY"
 
 GITHUB_TOKEN_ENVS = (STAR_LISTS_TOKEN_ENV, GITHUB_TOKEN_ENV, GH_TOKEN_ENV)
 _GH_HOSTNAME = "github.com"
+ENV_FILE_NAME = ".env"
+APP_NAME = "git-star-list-sort"
+NO_DOTENV_ENV = "GIT_STAR_LIST_SORT_NO_DOTENV"
 _GH_TOKEN_SOURCE = "gh auth token"
 _ACCOUNT_MARKER_PARTS = ("Logged", "in", "to")
 _ACCOUNT_KEYWORD = "account"
@@ -130,11 +134,75 @@ def _gh_token(run: Callable[..., object]) -> str:
     return token
 
 
+def load_env_file(path: Path) -> dict[str, str]:
+    """Parse a minimal ``KEY=VALUE`` file, ignoring comments and blanks."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        values[key.strip()] = value.strip().strip("'\"")
+    return values
+
+
+def config_candidates(start: Path | None = None) -> list[Path]:
+    """Where to look for credentials, most specific first.
+
+    A project-local ``.env`` wins, so a checkout can carry its own settings; the
+    user config directory follows, so the installed CLI works from any working
+    directory.
+    """
+    directory = (start or Path.cwd()).resolve()
+    candidates = [
+        candidate / ENV_FILE_NAME for candidate in [directory, *directory.parents]
+    ]
+    candidates.append(Path.home() / ".config" / APP_NAME / ENV_FILE_NAME)
+    return candidates
+
+
+def dotenv_enabled() -> bool:
+    """Whether ``.env`` files may supply credentials.
+
+    Set ``GIT_STAR_LIST_SORT_NO_DOTENV=1`` to force pure-environment resolution,
+    which is what the test suite and any scripted run needs for reproducibility.
+    """
+    return not os.environ.get(NO_DOTENV_ENV, "").strip()
+
+
+def dotenv_values(start: Path | None = None) -> dict[str, str]:
+    """Read the first available ``.env`` from the candidate locations.
+
+    An installed console script cannot source a shell profile, so without this a
+    token in ``.env`` is invisible and ``apply`` fails for a reason that looks
+    unrelated to configuration. Real environment variables still win.
+    """
+    if not dotenv_enabled():
+        return {}
+    for path in config_candidates(start):
+        if path.is_file():
+            return load_env_file(path)
+    return {}
+
+
 def resolve_github_token(
-    env: Mapping[str, str] | None = None, *, run: Callable[..., object] | None = None
+    env: Mapping[str, str] | None = None,
+    *,
+    run: Callable[..., object] | None = None,
+    include_dotenv: bool = True,
 ) -> tuple[str, str]:
-    """Return the GitHub token and a human-readable label naming its source."""
-    environ = os.environ if env is None else env
+    """Return the GitHub token and a label naming its source.
+
+    Precedence: environment variables, then ``.env``, then the `gh` CLI.
+    """
+    environ = dict(os.environ if env is None else env)
+    if include_dotenv and env is None and dotenv_enabled():
+        for name, value in dotenv_values().items():
+            environ.setdefault(name, value)
     found = _first_environment_value(environ, GITHUB_TOKEN_ENVS)
     if found is not None:
         return found
@@ -142,10 +210,13 @@ def resolve_github_token(
 
 
 def resolve_jev_credentials(
-    env: Mapping[str, str] | None = None,
+    env: Mapping[str, str] | None = None, *, include_dotenv: bool = True
 ) -> tuple[str, str]:
-    """Return the Jev API key and a human-readable label naming its source."""
-    environ = os.environ if env is None else env
+    """Return the Jev API key and a label naming its source."""
+    environ = dict(os.environ if env is None else env)
+    if include_dotenv and env is None and dotenv_enabled():
+        for name, value in dotenv_values().items():
+            environ.setdefault(name, value)
     found = _first_environment_value(environ, (JEV_API_KEY_ENV, TYPESAFE_API_KEY_ENV))
     if found is None:
         raise RuntimeError(MISSING_JEV_KEY)

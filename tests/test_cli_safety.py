@@ -101,6 +101,16 @@ def classification(list_id="UL_tools", probabilities=None):
     return classify
 
 
+def hermetic(environment: dict) -> dict:
+    """Environment for a hermetic run.
+
+    ``mock.patch.dict(..., clear=True)`` wipes the opt-out flag that stops the
+    credential resolvers reading a developer's ``.env`` or ``~/.config`` file, so
+    it must be re-added here or these tests would silently use real credentials.
+    """
+    return {**environment, "GIT_STAR_LIST_SORT_NO_DOTENV": "1"}
+
+
 def run_cli(argv, client, classify=None, env=None):
     """Run the CLI with hermetic environment, API, and Jev stubs."""
     names = credential_names()
@@ -114,7 +124,7 @@ def run_cli(argv, client, classify=None, env=None):
     stdout, stderr = io.StringIO(), io.StringIO()
     classifier = classify or classification()
     with (
-        mock.patch.dict(os.environ, environment, clear=True),
+        mock.patch.dict(os.environ, hermetic(environment), clear=True),
         mock.patch.object(sys, "argv", ["git-star-list-sort", *argv]),
         mock.patch.object(cli, "GitHubAPI", return_value=client),
         mock.patch.object(cli, "fetch_readme_excerpt", return_value=None),
@@ -132,7 +142,7 @@ class CredentialResolutionTests(unittest.TestCase):
         client = FakeOrganizationAPI()
         stdout, stderr = io.StringIO(), io.StringIO()
         with (
-            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.dict(os.environ, hermetic({}), clear=True),
             mock.patch.object(sys, "argv", ["git-star-list-sort", "--limit", "1"]),
             mock.patch.object(cli, "GitHubAPI", return_value=client) as github_api,
             mock.patch.object(cli, "fetch_readme_excerpt", return_value=None),
@@ -165,7 +175,9 @@ class CredentialResolutionTests(unittest.TestCase):
         credentials = credentials_module()
         with (
             mock.patch.dict(
-                os.environ, {credentials.JEV_API_KEY_ENV: "jev-test-key"}, clear=True
+                os.environ,
+                hermetic({credentials.JEV_API_KEY_ENV: "jev-test-key"}),
+                clear=True,
             ),
             mock.patch.object(sys, "argv", ["git-star-list-sort"]),
             mock.patch.object(
@@ -187,7 +199,7 @@ class CredentialResolutionTests(unittest.TestCase):
         with (
             mock.patch.dict(
                 os.environ,
-                {credentials.STAR_LISTS_TOKEN_ENV: "github-test-token"},
+                hermetic({credentials.STAR_LISTS_TOKEN_ENV: "github-test-token"}),
                 clear=True,
             ),
             mock.patch.object(sys, "argv", ["git-star-list-sort"]),

@@ -187,6 +187,93 @@ mutation AssignList($input: UpdateUserListsForItemInput!) {
 """
 
 
+LIST_ITEMS_DETAIL_QUERY = """
+query ListItemsDetail($id: ID!, $cursor: String) {
+  node(id: $id) {
+    ... on UserList {
+      items(first: 50, after: $cursor) {
+        nodes {
+          ... on Repository {
+            nameWithOwner
+            description
+            primaryLanguage { name }
+            repositoryTopics(first: 8) { nodes { topic { name } } }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+
+
+def list_item_details(
+    client: GraphQLExecutor, list_id: str, limit: int = 20
+) -> list[dict[str, Any]]:
+    """Repositories already in a List, with the fields that describe them.
+
+    A List's title alone often under-determines what belongs in it, so the
+    description generator uses the actual members as evidence.
+    """
+    details: list[dict[str, Any]] = []
+    cursor = None
+    while len(details) < limit:
+        node = client.execute(
+            LIST_ITEMS_DETAIL_QUERY, {"id": list_id, "cursor": cursor}
+        )["node"]
+        if node is None:
+            return details
+        connection = node["items"]
+        for item in connection["nodes"]:
+            if not isinstance(item, dict):
+                continue
+            details.append(
+                {
+                    "name_with_owner": item.get("nameWithOwner"),
+                    "description": item.get("description"),
+                    "language": (
+                        item["primaryLanguage"]["name"]
+                        if item.get("primaryLanguage")
+                        else None
+                    ),
+                    "topics": [
+                        topic["topic"]["name"]
+                        for topic in (item.get("repositoryTopics") or {}).get(
+                            "nodes", []
+                        )
+                        if isinstance(topic, dict) and topic.get("topic")
+                    ],
+                }
+            )
+            if len(details) >= limit:
+                break
+        if not connection["pageInfo"]["hasNextPage"]:
+            break
+        cursor = connection["pageInfo"]["endCursor"]
+    return details
+
+
+def format_evidence(details: list[dict[str, Any]]) -> str:
+    """Render List members as prompt evidence."""
+    if not details:
+        return (
+            "Evidence: this List is currently empty, so its title and the "
+            "distinction from sibling Lists are the only available signal."
+        )
+    lines = ["Evidence - repositories already in this List:"]
+    for item in details:
+        parts = [f"- {item['name_with_owner']}"]
+        if item.get("description"):
+            parts.append(f": {item['description'].strip()}")
+        if item.get("language"):
+            parts.append(f" [{item['language']}]")
+        if item.get("topics"):
+            parts.append(f" topics: {', '.join(item['topics'])}")
+        lines.append("".join(parts))
+    return "\n".join(lines)
+
+
 def list_memberships(
     client: GraphQLExecutor, list_ids: list[str]
 ) -> dict[str, set[str]]:
