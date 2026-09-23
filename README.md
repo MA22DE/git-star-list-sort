@@ -133,6 +133,29 @@ git-star-list-sort --include-unlisted --output output/classifications.json
 git-star-list-sort --limit 10 --include-unlisted --output output/classifications.json
 ```
 
+### Bounding a batch
+
+`--limit N` takes the **newest N stars, most recently starred first**, so a huge
+star count cannot turn into a huge batch:
+
+```bash
+git-star-list-sort --limit 100 --include-unlisted --output output/classifications.json
+```
+
+That is the usual way to sort a bounded slice of recent stars — 100 repositories
+costs 100 Jev requests (roughly 1.5 minutes at the measured ~0.4s each), not 1203.
+Incremental use is simply raising the number later: results are per-run and
+assignment is additive, so `--limit 100` then `--limit 300` continues where you
+left off rather than starting over.
+
+Two things to know about combining flags:
+
+- `--limit` bounds what is *fetched*; the default report-only mode still skips
+  unlisted stars. `--limit 100` alone on a fresh account classifies very little, so
+  use `--include-unlisted` when you actually want the batch sorted.
+- `--limit 0` means all stars. The notice tells you how many were classified, and
+  says `Nothing to classify` outright when everything fetched was skipped.
+
 When repositories are skipped, the tool says so on stderr:
 
 ```

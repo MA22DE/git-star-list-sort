@@ -16,6 +16,7 @@ from git_star_list_sort import cli
 from git_star_list_sort.github_api import (
     ASSIGN_LIST_MUTATION,
     LIST_ITEMS_QUERY,
+    STARS_QUERY,
 )
 from tests.helpers import FakeGraphQL, repo
 
@@ -236,6 +237,57 @@ class ReportOnlyDefaultTests(unittest.TestCase):
         self.assertEqual(2, len(report["results"]))
         self.assertEqual(0, report["unlisted_skipped"])
         self.assertEqual(2, classify.call_count)
+
+    def test_skip_notice_says_how_many_were_classified(self):
+        # The notice must make a near-empty run obvious: "1 classified" out of a
+        # 100-star batch explains why the report is tiny.
+        client = FakeOrganizationAPI()
+        _, stderr, _ = run_cli([], client)
+
+        self.assertIn("1 classified", stderr.getvalue())
+
+    def test_nothing_to_classify_is_called_out_explicitly(self):
+        # A run where every fetched star is unlisted does full work for no result,
+        # so it must not look like a silent success.
+        client = FakeOrganizationAPI()
+        client.star_edges = [
+            {"starredAt": "2026-01-02T00:00:00Z", "node": repo("R_x", "x/tool")}
+        ]
+        stdout, stderr, classify = run_cli([], client)
+
+        self.assertEqual([], json.loads(stdout.getvalue())["results"])
+        self.assertEqual(0, classify.call_count)
+        self.assertIn("0 classified", stderr.getvalue())
+        self.assertIn("Nothing to classify", stderr.getvalue())
+        self.assertIn("--include-unlisted", stderr.getvalue())
+
+    def test_limit_bounds_the_number_classified(self):
+        # --limit is the batch guard: only N stars are fetched and classified, so a
+        # large star count cannot turn into a large batch. Recency ordering is
+        # GitHub's (STARRED_AT DESC, asserted against the live API elsewhere); the
+        # fake serves edges in the order it is given them.
+        client = FakeOrganizationAPI()
+        client.star_edges = [
+            {
+                "starredAt": f"2026-01-{day:02d}T00:00:00Z",
+                "node": repo(f"R_{day}", f"owner/repo{day}"),
+            }
+            for day in range(1, 11)
+        ]
+        stdout, _, classify = run_cli(["--limit", "3", "--include-unlisted"], client)
+
+        names = [
+            item["repository"]["name_with_owner"]
+            for item in json.loads(stdout.getvalue())["results"]
+        ]
+        self.assertEqual(3, len(names))
+        self.assertEqual(3, classify.call_count)
+        # The stars query must be asked for at most the requested page size.
+        requests = [
+            variables for query, variables in client.calls if query == STARS_QUERY
+        ]
+        self.assertTrue(requests)
+        self.assertLessEqual(requests[0]["first"], 3)
 
     def test_classification_alone_issues_no_mutation(self):
         client = FakeOrganizationAPI()

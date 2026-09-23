@@ -204,7 +204,12 @@ def parser() -> argparse.ArgumentParser:
         "--limit",
         type=int,
         default=0,
-        help="Fetch and classify the newest N accessible stars, including listed ones (default: 0, all)",
+        help=(
+            "Classify only the newest N accessible stars, most recently starred "
+            "first (default: 0, all). Bounds the batch, but note that the "
+            "default report-only mode still skips unlisted stars, so pass "
+            "--include-unlisted too if you want all N classified"
+        ),
     )
     result.add_argument("--model", default="jev-latest")
     result.add_argument(
@@ -273,11 +278,18 @@ def run() -> None:
             1 for repository in selected if repository["id"] not in listed_ids
         )
         if unlisted_skipped:
+            remaining = len(selected) - unlisted_skipped
             log_progress(
                 f"Report-only: {unlisted_skipped} unlisted stars skipped because they "
-                "are not in any GitHub List; pass --include-unlisted to classify "
-                "them too"
+                f"are not in any GitHub List; {remaining} classified. Pass "
+                "--include-unlisted to classify them too"
             )
+            if remaining == 0:
+                # Worth spelling out: the run cost a full fetch and produced nothing.
+                log_progress(
+                    "Nothing to classify. Re-run with --include-unlisted to sort the "
+                    "stars that are not in a List yet."
+                )
         selected = [
             repository for repository in selected if repository["id"] in listed_ids
         ]
