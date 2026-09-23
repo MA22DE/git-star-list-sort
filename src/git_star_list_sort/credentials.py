@@ -17,6 +17,9 @@ _GH_HOSTNAME = "github.com"
 _GH_TOKEN_SOURCE = "gh auth token"
 _ACCOUNT_MARKER_PARTS = ("Logged", "in", "to")
 _ACCOUNT_KEYWORD = "account"
+# Placeholder for a login line whose account name could not be read. Keeping it
+# makes the multi-account guard fail closed on unrecognised `gh` output.
+_UNPARSEABLE_ACCOUNT = "\x00unparseable"
 
 MISSING_GITHUB_TOKEN = (
     f"set {STAR_LISTS_TOKEN_ENV} (or {GH_TOKEN_ENV}/{GITHUB_TOKEN_ENV}), or log in "
@@ -84,6 +87,10 @@ def _logged_in_accounts(status: str) -> list[str]:
             try:
                 login = parts[parts.index(_ACCOUNT_KEYWORD, start) + 1]
             except (ValueError, IndexError):
+                # The line announces a login we could not read. Recording a
+                # placeholder keeps the guard fail-closed instead of letting an
+                # unrecognised format look like "no account".
+                accounts.append(_UNPARSEABLE_ACCOUNT)
                 break
             accounts.append(login)
             break
@@ -94,10 +101,17 @@ def _gh_token(run: Callable[..., object]) -> str:
     accounts = _logged_in_accounts(
         _execute(run, "gh", "auth", "status", "--hostname", _GH_HOSTNAME)
     )
+    # Count LOGIN LINES, not distinct logins: two unreadable logins must still
+    # refuse, and a genuinely duplicated block must not. Deduplicating by value
+    # would collapse distinct-but-unparseable accounts into one.
     if len(accounts) > 1:
+        named = ", ".join(
+            "an unrecognised account" if item == _UNPARSEABLE_ACCOUNT else item
+            for item in accounts
+        )
         raise RuntimeError(
             f"`gh` is logged in to more than one account "
-            f"({', '.join(sorted(set(accounts)))}); refusing to guess which one to "
+            f"({named}); refusing to guess which one to "
             f"use, so set {STAR_LISTS_TOKEN_ENV} to the intended token explicitly"
         )
     try:

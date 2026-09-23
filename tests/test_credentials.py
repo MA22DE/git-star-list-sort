@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import unittest
 from unittest import mock
 
@@ -155,6 +156,41 @@ class ResolveGitHubTokenTests(unittest.TestCase):
         self.assertEqual(GITHUB_SECRET, token)
         self.assertIn("gh", source.casefold())
 
+    def test_real_gh_status_shape_with_checkmark_is_parsed(self):
+        # `gh` prefixes the login line with a tick; the parser must not depend on
+        # the line starting with the marker.
+        status = (
+            "github.com\n  \u2713 Logged in to github.com account octocat (keyring)\n"
+        )
+        run = mock.Mock(
+            side_effect=[
+                gh_result(stdout=status),
+                gh_result(stdout=f"{GITHUB_SECRET}\n"),
+            ]
+        )
+        token, _ = credentials.resolve_github_token({}, run=run)
+        self.assertEqual(GITHUB_SECRET, token)
+
+    def test_multiple_accounts_are_refused_even_if_the_login_is_unreadable(self):
+        # Fail closed: wording changes, localisation, or a future `gh` format must
+        # not silently downgrade a two-account session to "guess the first one".
+        for status in (
+            "  Logged in to github.com as octocat\n  Logged in to github.com as hubot\n",
+            "  Logged in to github.com ??? a\n  Logged in to github.com ??? b\n",
+        ):
+            with self.subTest(status=status):
+                run = mock.Mock(
+                    side_effect=[
+                        gh_result(stdout=status),
+                        gh_result(stdout=f"{GITHUB_SECRET}\n"),
+                    ]
+                )
+                with self.assertRaises((RuntimeError, ValueError)) as caught:
+                    credentials.resolve_github_token({}, run=run)
+                self.assertIn("more than one account", str(caught.exception))
+                # Refusal must happen before any token is requested.
+                self.assertEqual(1, run.call_count)
+
 
 class ResolveJevCredentialsTests(unittest.TestCase):
     def test_jev_api_key_takes_priority(self):
@@ -199,17 +235,24 @@ class SecretRedactionTests(unittest.TestCase):
 
     def test_jev_key_never_appears_in_errors_or_stderr(self):
         stderr = io.StringIO()
+        # A real key in the environment must not leak through any output path.
         with (
+            mock.patch.dict(
+                os.environ,
+                {credentials.JEV_API_KEY_ENV: JEV_SECRET},
+                clear=True,
+            ),
             contextlib.redirect_stderr(stderr),
-            self.assertRaises((RuntimeError, ValueError)) as caught,
         ):
+            api_key, source = credentials.resolve_jev_credentials()
+            self.assertEqual(JEV_SECRET, api_key)
+            self.assertNotIn(JEV_SECRET, source)
+            self.assertNotIn(JEV_SECRET, stderr.getvalue())
+        # And a failure path must not echo it either.
+        with contextlib.redirect_stderr(stderr), self.assertRaises(RuntimeError):
             credentials.resolve_jev_credentials(
-                {credentials.TYPESAFE_API_KEY_ENV: JEV_SECRET}
-                if False
-                else {credentials.JEV_API_KEY_ENV: ""}
+                {credentials.JEV_API_KEY_ENV: "", credentials.TYPESAFE_API_KEY_ENV: ""}
             )
-        message = str(caught.exception)
-        self.assertNotIn(JEV_SECRET, message)
         self.assertNotIn(JEV_SECRET, stderr.getvalue())
 
     def test_resolved_sources_never_contain_the_secret(self):

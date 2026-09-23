@@ -8,7 +8,7 @@ so later classification runs need no LLM credentials of their own.
 
 Run it by hand when the taxonomy changes:
 
-    git-star-list-sort --describe-lists-output lists.json
+    git-star-list-sort-describe --describe-lists-output lists.json
 
 Hand edits to ``lists.json`` are preserved: the command refuses to overwrite an
 existing description unless ``--force`` is given.

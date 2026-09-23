@@ -169,10 +169,9 @@ class CredentialResolutionTests(unittest.TestCase):
             ),
             mock.patch.object(sys, "argv", ["git-star-list-sort"]),
             mock.patch.object(
-                cli.credentials,
+                cli.credentials.subprocess,
                 "run",
                 side_effect=FileNotFoundError("gh"),
-                create=True,
             ),
             contextlib.redirect_stderr(io.StringIO()) as stderr,
             self.assertRaises(SystemExit) as caught,

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
 
+from .credentials import resolve_github_token
 from .github_api import (
     ASSIGN_LIST_MUTATION,
     GitHubAPI,
@@ -132,9 +132,11 @@ def run() -> None:
         help="Validate against GitHub without updating Lists",
     )
     args = parser.parse_args()
-    token = os.environ.get("STAR_LISTS_TOKEN", "")
-    if not token:
-        parser.error("set STAR_LISTS_TOKEN")
+    try:
+        token, source = resolve_github_token()
+    except (RuntimeError, ValueError) as error:
+        parser.error(str(error))
+    print(f"GitHub credentials: {source}", file=sys.stderr)
     with args.report.open(encoding="utf-8") as handle:
         report = json.load(handle)
     summary = apply_report(GitHubAPI(token), report, dry_run=args.dry_run)
