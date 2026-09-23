@@ -15,14 +15,18 @@ from html import unescape
 from pathlib import Path
 from typing import Any
 
+from . import credentials
+from .descriptions import build_criteria, load_descriptions
 from .github_api import (
     GitHubAPI,
     GraphQLExecutor,
+    list_memberships,
     paginated_lists,
     starred_repositories,
 )
 
 DEFAULT_JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
+DEFAULT_LISTS_FILE = Path(__file__).resolve().parents[2] / "lists.json"
 RETRYABLE_STATUS = {429, 502, 503, 504, 529}
 README_EXCERPT_LENGTH = 2000
 NO_CATEGORY = "no_matching_category"
@@ -53,6 +57,13 @@ def fetch_stars(
 
     stars = starred_repositories(client, limit=limit or None, on_progress=record_total)
     return stars, total
+
+
+def listed_repository_ids(
+    client: GraphQLExecutor, lists: list[dict[str, Any]]
+) -> set[str]:
+    memberships = list_memberships(client, [item["id"] for item in lists])
+    return {repository_id for ids in memberships.values() for repository_id in ids}
 
 
 def readme_excerpt(markdown: str) -> str:
@@ -188,6 +199,25 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--output", type=Path, help="Save JSON to this file instead of stdout"
     )
+    result.add_argument(
+        "--include-unlisted",
+        action="store_true",
+        help=(
+            "Also classify stars that are not in any GitHub List yet; by default "
+            "only repositories already in at least one List are classified"
+        ),
+    )
+    result.add_argument(
+        "--lists-file",
+        "--describe-lists",
+        dest="lists_file",
+        type=Path,
+        default=DEFAULT_LISTS_FILE,
+        help=(
+            "JSON file with committed List descriptions used as Jev criteria "
+            "(default: lists.json next to the repository root)"
+        ),
+    )
     return result
 
 
@@ -196,13 +226,16 @@ def run() -> None:
     args = argument_parser.parse_args()
     if args.limit < 0:
         argument_parser.error("--limit must be zero or greater")
-    api_key = os.environ.get("JEV_API_KEY", "")
-    if not api_key:
-        argument_parser.error("set JEV_API_KEY")
-
-    token = os.environ.get("STAR_LISTS_TOKEN", "")
-    if not token:
-        argument_parser.error("set STAR_LISTS_TOKEN")
+    try:
+        api_key, api_key_source = credentials.resolve_jev_credentials()
+    except (OSError, RuntimeError, ValueError) as error:
+        argument_parser.error(str(error))
+    log_progress(f"Jev credentials: {api_key_source}")
+    try:
+        token, token_source = credentials.resolve_github_token()
+    except (OSError, RuntimeError, ValueError) as error:
+        argument_parser.error(str(error))
+    log_progress(f"GitHub credentials: {token_source}")
 
     client = GitHubAPI(token)
     login, lists = paginated_lists(client)
@@ -216,9 +249,22 @@ def run() -> None:
         )
 
     selected, starred_total = fetch_stars(client, args.limit)
-    criteria = {
-        item["id"]: f"{item['name']}: {item.get('description') or ''}" for item in lists
-    }
+    unlisted_skipped = 0
+    if not args.include_unlisted:
+        listed_ids = listed_repository_ids(client, lists)
+        unlisted_skipped = sum(
+            1 for repository in selected if repository["id"] not in listed_ids
+        )
+        if unlisted_skipped:
+            log_progress(
+                f"Report-only: {unlisted_skipped} unlisted stars skipped because they "
+                "are not in any GitHub List; pass --include-unlisted to classify "
+                "them too"
+            )
+        selected = [
+            repository for repository in selected if repository["id"] in listed_ids
+        ]
+    criteria = build_criteria(lists, load_descriptions(args.lists_file))
     criteria[NO_CATEGORY] = (
         "None of the existing Lists fits the repository's purpose, or the available "
         "metadata and README excerpt are insufficient to choose a category."
@@ -229,6 +275,7 @@ def run() -> None:
         "requested_model": args.model,
         "existing_lists": lists,
         "starred_total": starred_total,
+        "unlisted_skipped": unlisted_skipped,
         "results": [],
     }
     for index, repository in enumerate(selected, start=1):

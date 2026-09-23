@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from git_star_list_sort.github_api import LISTS_QUERY, STARS_QUERY
+from git_star_list_sort.github_api import LIST_ITEMS_QUERY, LISTS_QUERY, STARS_QUERY
 
 
 def repo(repository_id: str, name: str) -> dict[str, Any]:
@@ -37,6 +37,9 @@ class FakeGraphQL:
             {"starredAt": "2026-01-02T00:00:00Z", "node": repo("R_new", "new/tool")},
             {"starredAt": "2026-01-01T00:00:00Z", "node": repo("R_listed", "old/tool")},
         ]
+        # Repository IDs that already belong to a List, keyed by List ID. Only
+        # "old/tool" is listed, so the safe default classifies just that one.
+        self.list_items = {"UL_tools": ["R_listed"]}
 
     def execute(
         self, query: str, variables: dict[str, Any], allow_partial: bool = False
@@ -68,6 +71,16 @@ class FakeGraphQL:
                             "endCursor": str(end),
                         },
                         "totalCount": len(self.star_edges),
+                    }
+                }
+            }
+        if query == LIST_ITEMS_QUERY:
+            repository_ids = self.list_items.get(variables["id"], [])
+            return {
+                "node": {
+                    "items": {
+                        "nodes": [{"id": item_id} for item_id in repository_ids],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
                     }
                 }
             }

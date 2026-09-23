@@ -200,9 +200,10 @@ class JevTests(unittest.TestCase):
                 sys,
                 "argv",
                 [
-                    "github-star-organizer-jev",
+                    "git-star-list-sort",
                     "--limit",
                     "1",
+                    "--include-unlisted",
                     "--output",
                     str(output),
                     "--endpoint",
@@ -232,7 +233,11 @@ class JevTests(unittest.TestCase):
             "A developer tool.", report["results"][0]["repository"]["readme_excerpt"]
         )
         self.assertEqual(
-            ["Jev [1/1] new/tool -> Developer Tools (confidence 0.80, 0.12s)"],
+            [
+                f"Jev credentials: {jev.credentials.JEV_API_KEY_ENV}",
+                f"GitHub credentials: {jev.credentials.STAR_LISTS_TOKEN_ENV}",
+                "Jev [1/1] new/tool -> Developer Tools (confidence 0.80, 0.12s)",
+            ],
             stderr.getvalue().splitlines(),
         )
         self.assertTrue(
@@ -264,7 +269,9 @@ class JevTests(unittest.TestCase):
                 },
                 clear=True,
             ),
-            mock.patch.object(sys, "argv", ["github-star-organizer-jev"]),
+            mock.patch.object(
+                sys, "argv", ["git-star-list-sort", "--include-unlisted"]
+            ),
             mock.patch.object(jev, "GitHubAPI", return_value=client),
             mock.patch.object(jev, "fetch_readme_excerpt", return_value=None),
             mock.patch.object(
@@ -290,7 +297,24 @@ class JevTests(unittest.TestCase):
             all(item["repository"]["readme_excerpt"] is None for item in results)
         )
         self.assertEqual(0.9, results[0]["probabilities"][jev.NO_CATEGORY])
-        self.assertEqual(12, len(stderr.getvalue().splitlines()))
+        lines = stderr.getvalue().splitlines()
+        self.assertEqual(
+            [
+                f"Jev credentials: {jev.credentials.JEV_API_KEY_ENV}",
+                f"GitHub credentials: {jev.credentials.STAR_LISTS_TOKEN_ENV}",
+            ],
+            lines[:2],
+        )
+        self.assertEqual(14, len(lines))
+        for index, line in enumerate(lines[2:], start=1):
+            self.assertTrue(
+                line.startswith(
+                    f"Jev [{index}/12] owner/repo{index - 1} -> No matching category "
+                    "(confidence 0.80, "
+                ),
+                line,
+            )
+            self.assertTrue(line.endswith("s)"), line)
         self.assertIn(
             "Jev [12/12] owner/repo11 -> No matching category", stderr.getvalue()
         )
@@ -315,7 +339,9 @@ class JevTests(unittest.TestCase):
                 },
                 clear=True,
             ),
-            mock.patch.object(sys, "argv", ["github-star-organizer-jev"]),
+            mock.patch.object(
+                sys, "argv", ["git-star-list-sort", "--include-unlisted"]
+            ),
             mock.patch.object(jev, "GitHubAPI", return_value=client),
             self.assertRaisesRegex(ValueError, "254 Lists"),
         ):
@@ -334,7 +360,9 @@ class JevTests(unittest.TestCase):
                 },
                 clear=True,
             ),
-            mock.patch.object(sys, "argv", ["github-star-organizer-jev"]),
+            mock.patch.object(
+                sys, "argv", ["git-star-list-sort", "--include-unlisted"]
+            ),
             mock.patch.object(jev, "GitHubAPI", return_value=client),
             mock.patch.object(jev, "classify_repository") as classify,
             contextlib.redirect_stdout(stdout),
