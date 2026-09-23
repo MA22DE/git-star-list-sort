@@ -45,7 +45,27 @@ correct a generated description.
 
 ## Credentials
 
-No credential files are read unless you ask for them. Resolution order:
+**Nothing to export.** Put credentials in a `.env` and the tool finds them:
+
+```bash
+~/.config/git-star-list-sort/.env     # works from any directory
+# or a .env in your project (searched upward from the working directory)
+```
+
+```ini
+STAR_LISTS_TOKEN=ghp_...        # classic PAT with the `user` scope, for apply
+JEV_API_KEY=...                  # or TYPESAFE_API_KEY
+OPENROUTER_API_KEY=sk-or-v1-...  # only for -describe
+```
+
+A project-local `.env` wins over the user config, and a real environment variable
+wins over both, so `STAR_LISTS_TOKEN=... git-star-list-sort` still overrides
+without editing any file. The `.env` is read by the tool itself because an
+installed console script cannot source your shell profile. Set
+`GIT_STAR_LIST_SORT_NO_DOTENV=1` to disable file loading entirely (the test suite
+does this to stay hermetic).
+
+Resolution order:
 
 **Jev** — `JEV_API_KEY`, then `TYPESAFE_API_KEY`.
 
@@ -84,6 +104,12 @@ git-star-list-sort-describe --describe-lists-output lists.json
 # re-generate every description instead of keeping existing ones
 git-star-list-sort-describe --describe-lists-output lists.json --force
 ```
+
+The generator does not guess from the List title alone: it reads each List's
+actual members, with their descriptions, topics, and languages, and also names the
+sibling Lists most likely to be confused with it. This matters — `Typesafe-Jev`
+was once described as generic "type-safe programming" from its title, and only came
+out right once the real member (`reachjalil/jev-tree`) was supplied as evidence.
 
 The default endpoint reads `OPENROUTER_API_KEY` from `--env-file` (default `.env`)
 or the environment, and `OPENROUTER_MODEL` for the model, defaulting to
