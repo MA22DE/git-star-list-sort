@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from github_star_organizer_jev.github_api import LISTS_QUERY, STARS_QUERY
+from git_star_list_sort.github_api import LISTS_QUERY, STARS_QUERY
 
 
 def repo(repository_id: str, name: str) -> dict[str, Any]:

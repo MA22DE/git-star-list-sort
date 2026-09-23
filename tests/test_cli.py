@@ -12,7 +12,7 @@ class EntryPointTests(unittest.TestCase):
     def commands(self) -> list[list[str]]:
         executable = shutil.which("github-star-organizer-jev")
         self.assertIsNotNone(executable, "Install the package before running tests")
-        return [[executable], [sys.executable, "-m", "github_star_organizer_jev"]]
+        return [[executable], [sys.executable, "-m", "git_star_list_sort"]]
 
     def test_help_works_outside_the_project_directory(self):
         with tempfile.TemporaryDirectory() as directory:

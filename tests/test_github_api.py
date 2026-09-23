@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
-from github_star_organizer_jev.github_api import STARS_QUERY, starred_repositories
+from git_star_list_sort.github_api import STARS_QUERY, starred_repositories
 from tests.helpers import FakeGraphQL, repo
 
 

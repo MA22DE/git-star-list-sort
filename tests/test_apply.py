@@ -11,8 +11,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from github_star_organizer_jev import apply
-from github_star_organizer_jev.github_api import ASSIGN_LIST_MUTATION, LIST_ITEMS_QUERY
+from git_star_list_sort import apply
+from git_star_list_sort.github_api import ASSIGN_LIST_MUTATION, LIST_ITEMS_QUERY
 from tests.helpers import FakeGraphQL
 
 

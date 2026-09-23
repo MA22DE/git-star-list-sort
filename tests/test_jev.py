@@ -11,7 +11,7 @@ import urllib.error
 from pathlib import Path
 from unittest import mock
 
-from github_star_organizer_jev import cli as jev
+from git_star_list_sort import cli as jev
 from tests.helpers import FakeGraphQL, repo
 
 

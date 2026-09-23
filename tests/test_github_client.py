@@ -7,7 +7,7 @@ import unittest
 import urllib.error
 from unittest import mock
 
-from github_star_organizer_jev import github_api
+from git_star_list_sort import github_api
 from tests.helpers import repo
 
 
