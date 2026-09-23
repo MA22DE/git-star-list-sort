@@ -54,7 +54,7 @@ jobs:
           JEV_MODEL: ${{ inputs.model || 'jev-latest' }}
           JEV_ENDPOINT: ${{ inputs.endpoint || vars.JEV_ENDPOINT }}
         run: |
-          uv run --frozen github-star-organizer-jev \
+          uv run --frozen git-star-list-sort \
             --limit "$STAR_LIMIT" \
             --model "$JEV_MODEL" \
             --output output/classifications.json
@@ -72,5 +72,5 @@ jobs:
       #   env:
       #     STAR_LISTS_TOKEN: ${{ secrets.STAR_LISTS_TOKEN }}
       #   run: |
-      #     uv run --frozen github-star-organizer-jev-apply \
+      #     uv run --frozen git-star-list-sort-apply \
       #       --report output/classifications.json

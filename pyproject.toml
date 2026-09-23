@@ -9,6 +9,7 @@ dependencies = []
 [project.scripts]
 git-star-list-sort = "git_star_list_sort.cli:main"
 git-star-list-sort-apply = "git_star_list_sort.apply:main"
+git-star-list-sort-describe = "git_star_list_sort.describe:main"
 
 [build-system]
 requires = ["uv_build>=0.12.15,<0.13.0"]
