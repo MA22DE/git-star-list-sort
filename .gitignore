@@ -1,0 +1,9 @@
+output/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.venv/
+.env
+dist/
+
+.env

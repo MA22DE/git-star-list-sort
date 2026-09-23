@@ -1,0 +1,266 @@
+"""GitHub API client, queries, and pagination for star classification."""
+
+from __future__ import annotations
+
+import json
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections.abc import Callable
+from datetime import datetime
+from typing import Any, Protocol
+
+RETRYABLE_STATUS = {429, 502, 503, 504}
+
+
+class GitHubAPI:
+    """Access GitHub GraphQL and REST endpoints using a user token."""
+
+    def __init__(self, token: str):
+        self.token = token.strip()
+        if not self.token:
+            raise ValueError("set STAR_LISTS_TOKEN")
+        if any(character.isspace() for character in self.token):
+            raise ValueError("STAR_LISTS_TOKEN must not contain whitespace")
+
+    def _request(
+        self,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        accept: str = "application/vnd.github+json",
+        timeout: int = 60,
+    ) -> bytes:
+        request = urllib.request.Request(
+            f"https://api.github.com/{path}",
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers={
+                "Authorization": f"Bearer {self.token}",
+                "Accept": accept,
+                "Content-Type": "application/json",
+                "User-Agent": "github-star-organizer-jev",
+                "X-GitHub-Api-Version": "2026-03-10",
+            },
+            method="POST" if payload is not None else "GET",
+        )
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    return response.read()
+            except urllib.error.HTTPError as error:
+                error.close()
+                if error.code not in RETRYABLE_STATUS or attempt == 2:
+                    raise
+                time.sleep(2**attempt)
+        raise AssertionError("unreachable")
+
+    def execute(
+        self, query: str, variables: dict[str, Any], allow_partial: bool = False
+    ) -> dict[str, Any]:
+        try:
+            response = self._request(
+                "graphql", {"query": query, "variables": variables}
+            )
+        except urllib.error.HTTPError as error:
+            hint = (
+                " Check STAR_LISTS_TOKEN and its permissions."
+                if error.code in {401, 403}
+                else ""
+            )
+            raise RuntimeError(f"GitHub GraphQL HTTP {error.code}.{hint}") from None
+        try:
+            result = json.loads(response)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise RuntimeError("GitHub GraphQL returned invalid JSON") from None
+        if not isinstance(result, dict):
+            raise TypeError("GitHub GraphQL returned an invalid response")
+        data = result.get("data")
+        if result.get("errors"):
+            if not allow_partial or not isinstance(data, dict):
+                raise RuntimeError(f"GitHub GraphQL errors: {result['errors']}")
+            print(
+                f"GitHub GraphQL partial errors: {result['errors']}",
+                file=sys.stderr,
+                flush=True,
+            )
+        if not isinstance(data, dict):
+            raise TypeError("GitHub GraphQL returned no data")
+        return data
+
+    def readme(self, name_with_owner: str) -> str | None:
+        path = f"repos/{urllib.parse.quote(name_with_owner, safe='/')}/readme"
+        try:
+            return self._request(
+                path, accept="application/vnd.github.raw+json", timeout=30
+            ).decode("utf-8", errors="replace")
+        except OSError:
+            return None
+
+
+LISTS_QUERY = """
+query Lists($cursor: String) {
+  viewer {
+    login
+    lists(first: 100, after: $cursor) {
+      nodes { id name description isPrivate }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}
+"""
+
+
+STARS_QUERY = """
+query Stars($cursor: String, $first: Int = 100) {
+  viewer {
+    starredRepositories(
+      first: $first
+      after: $cursor
+      orderBy: {field: STARRED_AT, direction: DESC}
+    ) {
+      edges {
+        starredAt
+        node {
+          id
+          nameWithOwner
+          url
+          description
+          isArchived
+          isFork
+          isPrivate
+          primaryLanguage { name }
+          repositoryTopics(first: 20) { nodes { topic { name } } }
+        }
+      }
+      pageInfo { hasNextPage endCursor }
+      totalCount
+    }
+  }
+}
+"""
+
+
+class GraphQLExecutor(Protocol):
+    def execute(
+        self, query: str, variables: dict[str, Any], allow_partial: bool = False
+    ) -> dict[str, Any]: ...
+
+
+LIST_ITEMS_QUERY = """
+query ListItems($id: ID!, $cursor: String) {
+  node(id: $id) {
+    ... on UserList {
+      items(first: 100, after: $cursor) {
+        nodes { ... on Repository { id } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+
+ASSIGN_LIST_MUTATION = """
+mutation AssignList($input: UpdateUserListsForItemInput!) {
+  updateUserListsForItem(input: $input) { lists { id name } }
+}
+"""
+
+
+def list_memberships(
+    client: GraphQLExecutor, list_ids: list[str]
+) -> dict[str, set[str]]:
+    memberships: dict[str, set[str]] = {}
+    for list_id in list_ids:
+        cursor = None
+        memberships[list_id] = set()
+        while True:
+            # Partial membership data could remove an existing assignment.
+            node = client.execute(LIST_ITEMS_QUERY, {"id": list_id, "cursor": cursor})[
+                "node"
+            ]
+            if node is None:
+                raise ValueError(f"GitHub List is unavailable: {list_id}")
+            connection = node["items"]
+            for item in connection["nodes"]:
+                if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                    raise TypeError(f"Cannot read all memberships for List: {list_id}")
+                memberships[list_id].add(item["id"])
+            if not connection["pageInfo"]["hasNextPage"]:
+                break
+            cursor = connection["pageInfo"]["endCursor"]
+    return memberships
+
+
+def paginated_lists(client: GraphQLExecutor) -> tuple[str, list[dict[str, Any]]]:
+    cursor = None
+    login = ""
+    lists: list[dict[str, Any]] = []
+    while True:
+        viewer = client.execute(LISTS_QUERY, {"cursor": cursor})["viewer"]
+        login = viewer["login"]
+        connection = viewer["lists"]
+        lists.extend(connection["nodes"])
+        if not connection["pageInfo"]["hasNextPage"]:
+            return login, lists
+        cursor = connection["pageInfo"]["endCursor"]
+
+
+def starred_repositories(
+    client: GraphQLExecutor,
+    cutoff: datetime | None = None,
+    *,
+    limit: int | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> list[dict[str, Any]]:
+    if limit is not None and limit < 1:
+        raise ValueError("limit must be positive or None")
+    cursor = None
+    repositories: list[dict[str, Any]] = []
+    while True:
+        page_size = min(100, limit - len(repositories)) if limit else 100
+        connection = client.execute(
+            STARS_QUERY, {"cursor": cursor, "first": page_size}, allow_partial=True
+        )["viewer"]["starredRepositories"]
+        reached_cutoff = False
+        for edge in connection["edges"]:
+            starred_at = datetime.fromisoformat(edge["starredAt"])
+            if cutoff is not None and starred_at < cutoff:
+                reached_cutoff = True
+                break
+            repository = edge["node"]
+            if repository is None:
+                continue
+            repositories.append(
+                {
+                    "id": repository["id"],
+                    "name_with_owner": repository["nameWithOwner"],
+                    "url": repository["url"],
+                    "description": repository["description"],
+                    "language": (
+                        repository["primaryLanguage"]["name"]
+                        if repository["primaryLanguage"]
+                        else None
+                    ),
+                    "topics": [
+                        item["topic"]["name"]
+                        for item in repository["repositoryTopics"]["nodes"]
+                    ],
+                    "archived": repository["isArchived"],
+                    "fork": repository["isFork"],
+                    "private": repository["isPrivate"],
+                    "starred_at": edge["starredAt"],
+                }
+            )
+            if limit is not None and len(repositories) >= limit:
+                break
+        if on_progress:
+            on_progress(len(repositories), connection["totalCount"])
+        if (
+            reached_cutoff
+            or (limit is not None and len(repositories) >= limit)
+            or not connection["pageInfo"]["hasNextPage"]
+        ):
+            return repositories
+        cursor = connection["pageInfo"]["endCursor"]

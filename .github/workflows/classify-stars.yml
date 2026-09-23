@@ -1,0 +1,76 @@
+name: Classify starred repositories
+
+on:
+  # schedule:
+  #   - cron: "0 0 * * 1"  # Mondays at 00:00 UTC.
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: Number of stars to classify (0 for all)
+        required: true
+        default: 0
+        type: number
+      model:
+        description: Jev model
+        required: true
+        default: jev-latest
+        type: string
+      endpoint:
+        description: Jev-compatible API URL (blank uses the repository variable or TypeSafe)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  classify:
+    name: Classify stars
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Install project
+        run: uv sync --frozen
+
+      - name: Classify stars
+        env:
+          STAR_LISTS_TOKEN: ${{ secrets.STAR_LISTS_TOKEN }}
+          JEV_API_KEY: ${{ secrets.JEV_API_KEY }}
+          STAR_LIMIT: ${{ inputs.limit || '0' }}
+          JEV_MODEL: ${{ inputs.model || 'jev-latest' }}
+          JEV_ENDPOINT: ${{ inputs.endpoint || vars.JEV_ENDPOINT }}
+        run: |
+          uv run --frozen github-star-organizer-jev \
+            --limit "$STAR_LIMIT" \
+            --model "$JEV_MODEL" \
+            --output output/classifications.json
+
+      - name: Upload classification report
+        uses: actions/upload-artifact@v7
+        with:
+          name: star-classifications
+          path: output/classifications.json
+          if-no-files-found: error
+          retention-days: 30
+
+      # Uncomment this step to apply the report to existing Lists.
+      # - name: Apply List assignments
+      #   env:
+      #     STAR_LISTS_TOKEN: ${{ secrets.STAR_LISTS_TOKEN }}
+      #   run: |
+      #     uv run --frozen github-star-organizer-jev-apply \
+      #       --report output/classifications.json
