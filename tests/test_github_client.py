@@ -149,6 +149,39 @@ class GitHubAPITests(unittest.TestCase):
             self.assertIn("token", str(caught.exception).casefold())
             self.assertNotIn("github-test-token", str(caught.exception))
 
+    def test_missing_user_scope_is_explained_actionably(self):
+        # Applying needs the `user` scope; a `gh` OAuth token cannot mutate Lists.
+        # The raw GraphQL error does not say so, so the client must.
+        body = {
+            "errors": [
+                {
+                    "type": "INSUFFICIENT_SCOPES",
+                    "message": "requires one of the following scopes: ['user']",
+                }
+            ]
+        }
+        with (
+            mock.patch.object(
+                github_api.urllib.request, "urlopen", return_value=response(body)
+            ),
+            self.assertRaises(RuntimeError) as caught,
+        ):
+            github_api.GitHubAPI("github-test-token").execute("mutation", {"input": {}})
+        message = str(caught.exception)
+        self.assertIn("user", message)
+        self.assertIn("STAR_LISTS_TOKEN", message)
+        self.assertNotIn("github-test-token", message)
+
+    def test_other_graphql_errors_still_report_the_payload(self):
+        body = {"errors": [{"type": "NOT_FOUND", "message": "no such node"}]}
+        with (
+            mock.patch.object(
+                github_api.urllib.request, "urlopen", return_value=response(body)
+            ),
+            self.assertRaisesRegex(RuntimeError, "no such node"),
+        ):
+            github_api.GitHubAPI("github-test-token").execute("query", {})
+
     def test_transient_errors_retry_with_a_limit(self):
         for final in (response({"data": {"ok": True}}), http_error(504)):
             with (

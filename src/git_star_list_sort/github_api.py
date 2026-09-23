@@ -15,6 +15,16 @@ from typing import Any, Protocol
 RETRYABLE_STATUS = {429, 502, 503, 504}
 
 
+def _has_required_scopes(errors: object) -> bool:
+    """True when no GraphQL error reports a missing OAuth scope."""
+    if not isinstance(errors, list):
+        return True
+    for error in errors:
+        if isinstance(error, dict) and error.get("type") == "INSUFFICIENT_SCOPES":
+            return False
+    return True
+
+
 class GitHubAPI:
     """Access GitHub GraphQL and REST endpoints using a user token."""
 
@@ -78,6 +88,15 @@ class GitHubAPI:
             raise TypeError("GitHub GraphQL returned an invalid response")
         data = result.get("data")
         if result.get("errors"):
+            # A missing `user` scope is the common failure when applying, and the
+            # raw GraphQL text does not say what to do about it.
+            if not _has_required_scopes(result["errors"]):
+                raise RuntimeError(
+                    "the GitHub token cannot modify Lists: the `user` scope is "
+                    "required. Create a classic PAT with that scope and set "
+                    "STAR_LISTS_TOKEN to it (a `gh auth token` is enough to "
+                    "read, not to apply)."
+                )
             if not allow_partial or not isinstance(data, dict):
                 raise RuntimeError(f"GitHub GraphQL errors: {result['errors']}")
             print(

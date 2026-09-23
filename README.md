@@ -57,10 +57,21 @@ The tool prints which *source* it used (never the value). If `gh` is logged in t
 more than one account it refuses to guess and asks you to set `STAR_LISTS_TOKEN`
 explicitly.
 
-A `gh` OAuth token with `repo` scope is sufficient in practice: verified against
-a live account with 1203 stars and 25 Lists for both reading stars/Lists and
-writing List membership. The upstream README's "classic PAT with the `user`
-scope is required" claim is stale for the modern Lists GraphQL API.
+A `gh` OAuth token is **enough to classify, but not to apply.** This was tested,
+not assumed:
+
+| Operation | `gh` OAuth token (scopes `gist`, `read:org`, `repo`, `workflow`) |
+| --- | --- |
+| Read stars and Lists | works |
+| Add a repository to a List | **fails:** `updateUserListsForItem` requires the `user` scope |
+
+So classification runs on `gh auth token` out of the box, and the upstream
+README's advice holds for `apply`: create a classic PAT with the `user` scope
+(<https://github.com/settings/tokens>), export it as `STAR_LISTS_TOKEN`, and
+`apply` will prefer it over the `gh` fallback.
+
+If `gh` is logged in to more than one account the tool refuses to guess and asks
+you to set `STAR_LISTS_TOKEN` explicitly.
 
 ## Usage
 
