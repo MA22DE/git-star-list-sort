@@ -120,6 +120,41 @@ Applying is **additive**: it reads current memberships, adds the assigned List,
 and never removes a repository from a List. Lists are never created or deleted.
 `No matching category` results are skipped.
 
+## Validation status
+
+Be precise about what has actually been exercised, so nothing here reads as
+proven when it is not:
+
+| Path | Status |
+| --- | --- |
+| Classify (`git-star-list-sort`) | **Live-tested** end to end against GitHub + Jev |
+| Apply — read and validate (`--dry-run`) | **Live-tested**; confirmed side-effect free |
+| Apply — write (adding to a List) | **Not validated live.** Blocked by the `user` scope requirement above |
+| `--describe-lists` generation | **Not exercised end to end.** Needs `OPENROUTER_API_KEY` |
+
+Consequence of the last row: with no committed `lists.json`, criteria fall back to
+live GitHub descriptions, and 24 of 25 Lists currently have none, so each becomes
+`"<Name>: "` with no semantic content. Classification still runs and reports
+confidences, but **those confidences are not accuracy evidence** — they reflect the
+model's certainty given near-empty criteria, not how well the sort matches your
+intent. Generate descriptions first to make the output meaningful.
+
+Suggested order to finish the setup:
+
+```bash
+# 1. put OPENROUTER_API_KEY in .env
+# 2. generate, then review/edit the descriptions by hand
+git-star-list-sort-describe --describe-lists-output lists.json
+# 3. commit them so later runs are reproducible
+# 4. classify (default: only stars already in a List)
+git-star-list-sort --output output/classifications.json
+# 5. validate before writing; add a classic PAT with `user` scope first
+git-star-list-sort-apply --report output/classifications.json --dry-run
+```
+
+Note that `apply` is additive only: it can add a repository to a List but has no
+removal path, so undoing an assignment is a manual step on GitHub.
+
 ## Output
 
 JSON on stdout (or `--output`). Each result carries the repository, its README
