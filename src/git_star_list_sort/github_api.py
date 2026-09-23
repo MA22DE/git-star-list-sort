@@ -21,9 +21,9 @@ class GitHubAPI:
     def __init__(self, token: str):
         self.token = token.strip()
         if not self.token:
-            raise ValueError("set STAR_LISTS_TOKEN")
+            raise ValueError("set a GitHub token (STAR_LISTS_TOKEN)")
         if any(character.isspace() for character in self.token):
-            raise ValueError("STAR_LISTS_TOKEN must not contain whitespace")
+            raise ValueError("the GitHub token must not contain whitespace")
 
     def _request(
         self,
@@ -65,7 +65,7 @@ class GitHubAPI:
             )
         except urllib.error.HTTPError as error:
             hint = (
-                " Check STAR_LISTS_TOKEN and its permissions."
+                " Check the GitHub token and its permissions."
                 if error.code in {401, 403}
                 else ""
             )

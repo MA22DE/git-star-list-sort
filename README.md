@@ -50,7 +50,8 @@ No credential files are read unless you ask for them. Resolution order:
 **Jev** — `JEV_API_KEY`, then `TYPESAFE_API_KEY`.
 
 **GitHub** — `STAR_LISTS_TOKEN`, then `GH_TOKEN`, then `GITHUB_TOKEN`, then
-`gh auth token --hostname github.com` as a fallback.
+`gh auth token --hostname github.com` as a fallback. All three commands share
+this chain, so a report you classified is one you can apply.
 
 The tool prints which *source* it used (never the value). If `gh` is logged in to
 more than one account it refuses to guess and asks you to set `STAR_LISTS_TOKEN`

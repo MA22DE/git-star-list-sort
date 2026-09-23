@@ -141,19 +141,25 @@ def run() -> None:
         default=Path(".env"),
         help="File holding OPENROUTER_API_KEY (default: .env)",
     )
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--model",
+        help=(
+            "OpenRouter model id (default: OPENROUTER_MODEL from the environment "
+            f"or .env, else {DEFAULT_MODEL})"
+        ),
+    )
     parser.add_argument(
         "--force", action="store_true", help="Regenerate existing descriptions"
     )
     args = parser.parse_args()
 
-    if args.model != DEFAULT_MODEL and "/" not in args.model:
-        parser.error("--model must be an OpenRouter model id such as vendor/model")
-
     env = {**load_env(args.env_file), **os.environ}
     api_key = env.get("OPENROUTER_API_KEY", "").strip()
     if not api_key:
         parser.error(f"set OPENROUTER_API_KEY in the environment or in {args.env_file}")
+    model = args.model or env.get("OPENROUTER_MODEL", "").strip() or DEFAULT_MODEL
+    if model != DEFAULT_MODEL and "/" not in model:
+        parser.error("--model must be an OpenRouter model id such as vendor/model")
 
     client = GitHubAPI(resolve_github_token()[0])
     _, lists = paginated_lists(client)
@@ -168,11 +174,9 @@ def run() -> None:
 
         existing = load_descriptions(args.describe_lists_output)
 
-    descriptions = generate(
-        lists, api_key, args.model, existing=existing, force=args.force
-    )
+    descriptions = generate(lists, api_key, model, existing=existing, force=args.force)
     document = {
-        "generated_model": args.model,
+        "generated_model": model,
         "lists": descriptions,
     }
     args.describe_lists_output.parent.mkdir(parents=True, exist_ok=True)

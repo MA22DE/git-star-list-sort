@@ -143,7 +143,10 @@ class GitHubAPITests(unittest.TestCase):
             ):
                 github_api.GitHubAPI("github-test-token").execute("query", {})
             self.assertEqual(1, urlopen.call_count)
-            self.assertIn("STAR_LISTS_TOKEN", str(caught.exception))
+            # The message must point at the credentials, without naming one
+            # specific variable (the token can come from several sources), and
+            # it must never echo the token or the response body.
+            self.assertIn("token", str(caught.exception).casefold())
             self.assertNotIn("github-test-token", str(caught.exception))
 
     def test_transient_errors_retry_with_a_limit(self):

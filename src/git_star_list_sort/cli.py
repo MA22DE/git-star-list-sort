@@ -26,7 +26,24 @@ from .github_api import (
 )
 
 DEFAULT_JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
-DEFAULT_LISTS_FILE = Path(__file__).resolve().parents[2] / "lists.json"
+
+
+def default_lists_file() -> Path:
+    """Where committed List descriptions are looked for by default.
+
+    ``STAR_LISTS_FILE`` wins, then ``lists.json`` in the current directory (so the
+    file travels with wherever the user keeps their taxonomy), and only then the
+    checkout root, which exists for editable installs.
+    """
+    override = os.environ.get("STAR_LISTS_FILE", "").strip()
+    if override:
+        return Path(override)
+    local = Path("lists.json")
+    if local.exists():
+        return local
+    return Path(__file__).resolve().parents[2] / "lists.json"
+
+
 RETRYABLE_STATUS = {429, 502, 503, 504, 529}
 README_EXCERPT_LENGTH = 2000
 NO_CATEGORY = "no_matching_category"
@@ -212,10 +229,10 @@ def parser() -> argparse.ArgumentParser:
         "--describe-lists",
         dest="lists_file",
         type=Path,
-        default=DEFAULT_LISTS_FILE,
+        default=default_lists_file(),
         help=(
             "JSON file with committed List descriptions used as Jev criteria "
-            "(default: lists.json next to the repository root)"
+            "(default: STAR_LISTS_FILE, else ./lists.json, else the checkout root)"
         ),
     )
     return result

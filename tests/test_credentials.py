@@ -248,12 +248,40 @@ class SecretRedactionTests(unittest.TestCase):
             self.assertEqual(JEV_SECRET, api_key)
             self.assertNotIn(JEV_SECRET, source)
             self.assertNotIn(JEV_SECRET, stderr.getvalue())
-        # And a failure path must not echo it either.
-        with contextlib.redirect_stderr(stderr), self.assertRaises(RuntimeError):
+        # A second failure path with the secret still in the environment: the
+        # exception message must not echo it either.
+        stderr_value = io.StringIO()
+        with (
+            mock.patch.dict(
+                os.environ,
+                {credentials.JEV_API_KEY_ENV: JEV_SECRET},
+                clear=True,
+            ),
+            contextlib.redirect_stderr(stderr_value),
+        ):
+            api_key, source = credentials.resolve_jev_credentials()
+            # The resolved value is delivered to the caller, not printed.
+            self.assertEqual(JEV_SECRET, api_key)
+            self.assertNotIn(JEV_SECRET, source)
+            self.assertNotIn(JEV_SECRET, stderr_value.getvalue())
+
+        # A genuine failure with a real secret present: the missing-key error must
+        # not quote a secret that happens to sit in the environment.
+        stderr_value = io.StringIO()
+        with (
+            mock.patch.dict(
+                os.environ, {credentials.TYPESAFE_API_KEY_ENV: JEV_SECRET}, clear=True
+            ),
+            contextlib.redirect_stderr(stderr_value),
+            self.assertRaises(RuntimeError) as caught,
+        ):
+            # An explicit empty env forces the failure while the process
+            # environment still holds a real key.
             credentials.resolve_jev_credentials(
                 {credentials.JEV_API_KEY_ENV: "", credentials.TYPESAFE_API_KEY_ENV: ""}
             )
-        self.assertNotIn(JEV_SECRET, stderr.getvalue())
+        self.assertNotIn(JEV_SECRET, str(caught.exception))
+        self.assertNotIn(JEV_SECRET, stderr_value.getvalue())
 
     def test_resolved_sources_never_contain_the_secret(self):
         token, source = credentials.resolve_github_token(
