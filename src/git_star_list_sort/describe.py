@@ -30,11 +30,23 @@ from .github_api import GitHubAPI, paginated_lists
 DEFAULT_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
 MAX_TOKENS = 100
+# This model family emits chain-of-thought tokens before the answer, and a cap
+# sized for the visible answer alone is spent entirely on reasoning: the response
+# comes back with `content: null` and `finish_reason: "length"`. The request
+# budget therefore covers reasoning plus answer, while the prompt keeps the
+# visible description within the length you asked for.
+MAX_SENTENCES = 2
+MAX_WORDS = 60
+REQUEST_TOKEN_BUDGET = 2000
+# Reasoning length varies by title; a short one succeeds at 800 while an abstract
+# title has been observed to need ~860. Retrying once at double the budget turns
+# a single hard title into a slower success rather than an aborted batch.
+MAX_TOKEN_BUDGET = 4000
 PROMPT = (
     "You are naming the boundaries of a GitHub star List used for classifying "
     "repositories.\n"
     "Given the List title, write a description of at most two sentences and at "
-    f"most {MAX_TOKENS} tokens.\n"
+    f"most {MAX_SENTENCES} sentences and at most {MAX_WORDS} words.\n"
     "The description must state what belongs in the List and, when the title is "
     "ambiguous next to the sibling Lists, what does not.\n"
     "Reply with the description only: no preamble, no quotes, no markdown, no "
@@ -58,12 +70,18 @@ def load_env(path: Path) -> dict[str, str]:
     return values
 
 
-def describe(title: str, siblings: list[str], api_key: str, model: str) -> str:
-    """Return a short description for one List title."""
-    siblings_text = ", ".join(name for name in siblings if name != title)
+def _request_description(
+    title: str, siblings_text: str, api_key: str, model: str, budget: int
+) -> tuple[str | None, str | None]:
+    """Ask for one description.
+
+    Returns ``(description, None)`` on success or ``(None, reason)`` when the
+    model produced no visible text, so the caller can decide whether a larger
+    budget is worth trying.
+    """
     payload = {
         "model": model,
-        "max_tokens": MAX_TOKENS,
+        "max_tokens": budget,
         "messages": [
             {"role": "system", "content": PROMPT},
             {
@@ -85,19 +103,55 @@ def describe(title: str, siblings: list[str], api_key: str, model: str) -> str:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with urllib.request.urlopen(request, timeout=120) as response:
             result = json.load(response)
     except urllib.error.HTTPError as error:
         error.close()
         hint = " Check OPENROUTER_API_KEY." if error.code == 401 else ""
         raise RuntimeError(f"OpenRouter HTTP {error.code}.{hint}") from None
     try:
-        content = result["choices"][0]["message"]["content"].strip()
-    except (KeyError, IndexError, TypeError, AttributeError):
-        raise ValueError("OpenRouter returned an invalid description") from None
-    if not content:
-        raise ValueError(f"OpenRouter returned an empty description for {title!r}")
-    return " ".join(content.split())
+        choice = result["choices"][0]
+        message = choice["message"]
+    except (KeyError, IndexError, TypeError):
+        raise ValueError("OpenRouter returned an invalid response") from None
+    content = message.get("content")
+    if isinstance(content, str) and content.strip():
+        return " ".join(content.split()), None
+    finish = choice.get("finish_reason")
+    # A reasoning model that runs out of budget returns null content, which is
+    # otherwise indistinguishable from a malformed response.
+    reason = (
+        f"the {budget}-token budget was exhausted by the model's reasoning"
+        if finish == "length"
+        else f"finish_reason={finish!r}"
+    )
+    return None, reason
+
+
+def describe(title: str, siblings: list[str], api_key: str, model: str) -> str:
+    """Return a short description for one List title.
+
+    Reasoning length varies by title: a concrete name like ``SQLite`` answers
+    within a small budget, while an abstract one can burn several hundred tokens
+    of reasoning first. Because a batch should not fail on a single hard title,
+    an exhausted budget is retried once at double the size.
+    """
+    siblings_text = ", ".join(name for name in siblings if name != title)
+    budget = REQUEST_TOKEN_BUDGET
+    reason = "no response"
+    while budget <= MAX_TOKEN_BUDGET:
+        description, reason = _request_description(
+            title, siblings_text, api_key, model, budget
+        )
+        if description is not None:
+            return description
+        if "exhausted" not in reason or budget * 2 > MAX_TOKEN_BUDGET:
+            break
+        budget *= 2
+    raise ValueError(
+        f"OpenRouter returned no description for {title!r}: {reason}. "
+        f"Try a larger budget than {MAX_TOKEN_BUDGET} tokens."
+    )
 
 
 def generate(
@@ -123,6 +177,41 @@ def generate(
         descriptions[title] = text
         print(f"[{index}/{len(titles)}] {title}: {text}", file=sys.stderr, flush=True)
     return {title: descriptions[title] for title in titles}
+
+
+def generate_partial(
+    lists: list[dict[str, Any]],
+    api_key: str,
+    model: str,
+    *,
+    existing: dict[str, str] | None = None,
+    force: bool = False,
+) -> tuple[dict[str, str], list[tuple[str, str]]]:
+    """Describe each List, returning successes plus the titles that failed.
+
+    One uncooperative title must not discard the descriptions already generated.
+    """
+    titles = [item["name"] for item in lists]
+    descriptions: dict[str, str] = dict(existing or {})
+    failures: list[tuple[str, str]] = []
+    for index, title in enumerate(titles, start=1):
+        if not force and descriptions.get(title):
+            print(
+                f"[{index}/{len(titles)}] {title}: kept existing description",
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
+        try:
+            text = describe(title, titles, api_key, model)
+        except (RuntimeError, ValueError) as error:
+            failures.append((title, str(error)))
+            print(f"[{index}/{len(titles)}] {title}: FAILED - {error}", file=sys.stderr)
+            continue
+        descriptions[title] = text
+        print(f"[{index}/{len(titles)}] {title}: {text}", file=sys.stderr, flush=True)
+    ordered = {title: descriptions[title] for title in titles if title in descriptions}
+    return ordered, failures
 
 
 def run() -> None:
@@ -174,7 +263,9 @@ def run() -> None:
 
         existing = load_descriptions(args.describe_lists_output)
 
-    descriptions = generate(lists, api_key, model, existing=existing, force=args.force)
+    descriptions, failures = generate_partial(
+        lists, api_key, model, existing=existing, force=args.force
+    )
     document = {
         "generated_model": model,
         "lists": descriptions,
@@ -185,9 +276,15 @@ def run() -> None:
         encoding="utf-8",
     )
     print(
-        f"Wrote {len(descriptions)} descriptions to {args.describe_lists_output}",
+        f"Wrote {len(descriptions)} of {len(lists)} descriptions to "
+        f"{args.describe_lists_output}",
         file=sys.stderr,
     )
+    if failures:
+        # Saved output is still usable; list what is missing and why.
+        for title, reason in failures:
+            print(f"No description for {title!r}: {reason}", file=sys.stderr)
+        sys.exit(1)
 
 
 def main() -> None:

@@ -31,6 +31,18 @@ def chat_response(content: str) -> mock.Mock:
     return response
 
 
+def contextlib_response(payload: dict) -> mock.Mock:
+    """A urlopen-style context manager returning the given JSON payload."""
+    response = mock.Mock()
+    response.__enter__ = mock.Mock(
+        return_value=mock.Mock(
+            read=mock.Mock(return_value=json.dumps(payload).encode())
+        )
+    )
+    response.__exit__ = mock.Mock(return_value=False)
+    return response
+
+
 class LoadEnvTests(unittest.TestCase):
     def test_reads_key_value_pairs_and_ignores_noise(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -64,7 +76,9 @@ class DescribeTests(unittest.TestCase):
         self.assertEqual("Bearer k", request.headers["Authorization"])
         body = json.loads(request.data)
         self.assertEqual("m", body["model"])
-        self.assertLessEqual(body["max_tokens"], 100)
+        # The request budget must cover chain-of-thought tokens, not just the
+        # visible answer, or the response comes back with null content.
+        self.assertGreater(body["max_tokens"], describe.MAX_TOKENS)
         # The sibling title gives the model the boundary it must not cross.
         self.assertIn("Database tools", body["messages"][1]["content"])
         # A bare title is never used as its own description.
@@ -90,6 +104,44 @@ class DescribeTests(unittest.TestCase):
             self.assertRaises(ValueError),
         ):
             describe.describe("SQLite", [], "k", "m")
+
+    def test_reasoning_budget_exhaustion_is_reported_not_swallowed(self):
+        # Observed live: a reasoning model given a small max_tokens spends it all on
+        # chain-of-thought and returns content=None with finish_reason="length".
+        # That must be a clear error, not a confusing "invalid description".
+        payload = {
+            "choices": [
+                {
+                    "finish_reason": "length",
+                    "message": {"content": None, "reasoning": "thinking..."},
+                }
+            ]
+        }
+        with (
+            mock.patch.object(
+                describe.urllib.request,
+                "urlopen",
+                return_value=contextlib_response(payload),
+            ),
+            self.assertRaises(ValueError) as caught,
+        ):
+            describe.describe("SQLite", [], "k", "m")
+        message = str(caught.exception)
+        self.assertIn("reasoning", message)
+        self.assertIn("budget", message)
+
+    def test_null_content_without_length_still_fails_clearly(self):
+        payload = {"choices": [{"finish_reason": "stop", "message": {"content": None}}]}
+        with (
+            mock.patch.object(
+                describe.urllib.request,
+                "urlopen",
+                return_value=contextlib_response(payload),
+            ),
+            self.assertRaises(ValueError) as caught,
+        ):
+            describe.describe("SQLite", [], "k", "m")
+        self.assertIn("finish_reason", str(caught.exception))
 
 
 class GenerateTests(unittest.TestCase):
@@ -120,6 +172,71 @@ class GenerateTests(unittest.TestCase):
         with mock.patch.object(describe, "describe", side_effect=["A", "B"]):
             result = describe.generate(lists_fixture(), "k", "m")
         self.assertEqual(["SQLite", "Database tools"], list(result))
+
+    def test_exhausted_budget_is_retried_at_a_larger_size(self):
+        # Observed live: an abstract title burns the whole budget on reasoning.
+        # The retry must rescue the title instead of failing the batch.
+        exhausted = {
+            "choices": [{"finish_reason": "length", "message": {"content": None}}]
+        }
+        answered = {
+            "choices": [{"finish_reason": "stop", "message": {"content": "Text"}}]
+        }
+        with mock.patch.object(
+            describe.urllib.request,
+            "urlopen",
+            side_effect=[
+                contextlib_response(exhausted),
+                contextlib_response(answered),
+            ],
+        ) as urlopen:
+            self.assertEqual("Text", describe.describe("Abstract", [], "k", "m"))
+        budgets = [
+            json.loads(c.args[0].data)["max_tokens"] for c in urlopen.call_args_list
+        ]
+        self.assertEqual(2, len(budgets))
+        self.assertGreater(budgets[1], budgets[0])
+
+    def test_giving_up_after_the_retry_reports_the_reason(self):
+        exhausted = {
+            "choices": [{"finish_reason": "length", "message": {"content": None}}]
+        }
+        with (
+            mock.patch.object(
+                describe.urllib.request,
+                "urlopen",
+                return_value=contextlib_response(exhausted),
+            ) as urlopen,
+            self.assertRaises(ValueError) as caught,
+        ):
+            describe.describe("Abstract", [], "k", "m")
+        self.assertIn("reasoning", str(caught.exception))
+        budgets = [
+            json.loads(c.args[0].data)["max_tokens"] for c in urlopen.call_args_list
+        ]
+        self.assertEqual(max(budgets), describe.MAX_TOKEN_BUDGET)
+
+
+class GeneratePartialTests(unittest.TestCase):
+    def test_one_failure_keeps_the_other_descriptions(self):
+        with mock.patch.object(
+            describe,
+            "describe",
+            side_effect=["Good", ValueError("boom")],
+        ):
+            descriptions, failures = describe.generate_partial(
+                lists_fixture(), "k", "m"
+            )
+        self.assertEqual({"SQLite": "Good"}, descriptions)
+        self.assertEqual([("Database tools", "boom")], failures)
+
+    def test_no_failures_returns_every_description(self):
+        with mock.patch.object(describe, "describe", return_value="X"):
+            descriptions, failures = describe.generate_partial(
+                lists_fixture(), "k", "m"
+            )
+        self.assertEqual({"SQLite": "X", "Database tools": "X"}, descriptions)
+        self.assertEqual([], failures)
 
 
 if __name__ == "__main__":
