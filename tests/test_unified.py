@@ -670,5 +670,25 @@ class DeprecatedShimsTests(unittest.TestCase):
         self.assertEqual([], client.mutations())
 
 
+class HermeticCliTests(unittest.TestCase):
+    """Every test that runs the CLI in-process must pin the lists file.
+
+    The describe-check reads a lists file on every run, and rewrites it when
+    descriptions are generated. Without a pinned ``STAR_LISTS_FILE`` a test reads
+    the developer's real ``lists.json``; with a fake client that serves different
+    Lists that is how the committed descriptions were once truncated. This guard
+    catches a new module that forgets, which per-helper patches cannot.
+    """
+
+    def test_modules_that_run_the_cli_pin_the_lists_file(self):
+        runners = ("cli.run()", "cli.main()", "jev.run()")
+        for path in sorted(Path(__file__).parent.glob("test_*.py")):
+            source = path.read_text(encoding="utf-8")
+            if not any(marker in source for marker in runners):
+                continue
+            with self.subTest(module=path.name):
+                self.assertIn("STAR_LISTS_FILE", source)
+
+
 if __name__ == "__main__":
     unittest.main()

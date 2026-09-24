@@ -237,6 +237,37 @@ def generate_partial(
     return ordered, failures
 
 
+def write_descriptions(
+    lists_file: Path,
+    model: str,
+    *,
+    existing: dict[str, str],
+    generated: dict[str, str],
+) -> dict[str, str]:
+    """Merge and write the descriptions document, then read it back.
+
+    The single serializer for ``lists.json``: ``generated`` holds only the Lists
+    that exist on GitHub right now, so merging it over ``existing`` is what keeps
+    a deleted List's committed description, exactly as the callers' "no longer on
+    GitHub" note promises. The file is rewritten only when the content actually
+    changes, and the caller always gets back what the file holds.
+    """
+    document = {"generated_model": model, "lists": {**existing, **generated}}
+    if lists_file.is_file():
+        try:
+            current = json.loads(lists_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            current = None
+        if current == document:
+            return load_descriptions(lists_file)
+    lists_file.parent.mkdir(parents=True, exist_ok=True)
+    lists_file.write_text(
+        json.dumps(document, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return load_descriptions(lists_file)
+
+
 def fill_missing_descriptions(
     client: GraphQLExecutor,
     lists: list[dict[str, Any]],
@@ -301,26 +332,9 @@ def fill_missing_descriptions(
         return None, warnings + [f"could not generate descriptions: {error}"]
     for title, reason in failures:
         warnings.append(f"no description for {title!r}: {reason}")
-    # generate_partial keeps only the live Lists, so merge the committed
-    # descriptions back in: a List deleted on GitHub keeps its description,
-    # exactly as the "no longer on GitHub" warning promises above.
-    document = {"generated_model": model, "lists": {**existing, **generated}}
-    # Only rewrite the file when the content actually changed, so a run whose
-    # generated set is identical never touches it (and a default path beside the
-    # checkout is not clobbered for nothing).
-    if lists_file.is_file():
-        try:
-            current = json.loads(lists_file.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            current = None
-        if current == document:
-            return load_descriptions(lists_file), warnings
-    lists_file.parent.mkdir(parents=True, exist_ok=True)
-    lists_file.write_text(
-        json.dumps(document, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    return load_descriptions(lists_file), warnings
+    return write_descriptions(
+        lists_file, model, existing=existing, generated=generated
+    ), warnings
 
 
 def run() -> None:
@@ -441,14 +455,11 @@ def run() -> None:
     )
     # Keep descriptions for Lists that are no longer on GitHub: the check above
     # reports them as kept rather than deleted.
-    document = {
-        "generated_model": model,
-        "lists": {**existing, **descriptions},
-    }
-    args.describe_lists_output.parent.mkdir(parents=True, exist_ok=True)
-    args.describe_lists_output.write_text(
-        json.dumps(document, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
-        encoding="utf-8",
+    write_descriptions(
+        args.describe_lists_output,
+        model,
+        existing=existing,
+        generated=descriptions,
     )
     print(
         f"Wrote {len(descriptions)} of {len(lists)} descriptions to "

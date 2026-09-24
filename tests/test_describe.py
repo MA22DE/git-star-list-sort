@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -296,6 +298,42 @@ class FillMissingDescriptionsTests(unittest.TestCase):
         self.assertEqual(document["lists"], committed)
         self.assertIn("Deleted List", warnings[0])
         self.assertIn("kept", warnings[0])
+
+
+class DescribeShimWriterTests(unittest.TestCase):
+    """The -describe writer goes through the same serializer as the unified run."""
+
+    def test_lists_gone_from_github_keep_their_description(self):
+        lists = [{"id": "UL_sqlite", "name": "SQLite", "description": None}]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "lists.json"
+            path.write_text(
+                json.dumps(
+                    {"generated_model": "m", "lists": {"Deleted List": "keep me"}}
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "k"}, clear=True),
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    ["git-star-list-sort-describe", "--describe-lists-output", str(path)],
+                ),
+                mock.patch.object(describe, "resolve_github_token", return_value=("t", "s")),
+                mock.patch.object(describe, "GitHubAPI"),
+                mock.patch.object(
+                    describe, "paginated_lists", return_value=("page", lists)
+                ),
+                mock.patch.object(describe, "describe", return_value="fresh"),
+                mock.patch.object(describe, "list_item_details", return_value=[]),
+            ):
+                describe.run()
+            document = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            {"Deleted List": "keep me", "SQLite": "fresh"}, document["lists"]
+        )
 
 
 if __name__ == "__main__":
