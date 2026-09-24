@@ -126,6 +126,15 @@ def run_cli(
             mock.patch.dict(os.environ, hermetic(environment), clear=True)
         )
         stack.enter_context(mock.patch.object(sys, "argv", [CLI_NAME, *argv]))
+        # Hermetic lists file: a path that does not exist, so no test reads the
+        # developer's real checkout lists.json (which drifts and would make
+        # assertions depend on live GitHub data).
+        stack.enter_context(
+            mock.patch.dict(
+                os.environ,
+                {"STAR_LISTS_FILE": str(Path(tempfile.gettempdir()) / "no-such-lists.json")},
+            )
+        )
         stack.enter_context(mock.patch.object(cli, "GitHubAPI", return_value=client))
         stack.enter_context(
             mock.patch.object(cli, "fetch_readme_excerpt", return_value=None)

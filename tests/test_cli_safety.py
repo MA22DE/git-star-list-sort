@@ -109,7 +109,14 @@ def hermetic(environment: dict) -> dict:
     credential resolvers reading a developer's ``.env`` or ``~/.config`` file, so
     it must be re-added here or these tests would silently use real credentials.
     """
-    return {**environment, "GIT_STAR_LIST_SORT_NO_DOTENV": "1"}
+    return {
+        **environment,
+        "GIT_STAR_LIST_SORT_NO_DOTENV": "1",
+        # Point the lists file at a path that does not exist so tests never
+        # read the developer's real checkout lists.json, which drifts with
+        # live GitHub and would make assertions depend on account state.
+        "STAR_LISTS_FILE": str(Path(tempfile.gettempdir()) / "no-such-lists.json"),
+    }
 
 
 def run_cli(argv, client, classify=None, env=None):
