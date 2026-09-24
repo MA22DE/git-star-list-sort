@@ -190,9 +190,7 @@ class CredentialResolutionTests(unittest.TestCase):
                 hermetic({credentials.JEV_API_KEY_ENV: "jev-test-key"}),
                 clear=True,
             ),
-            mock.patch.object(
-                sys, "argv", ["git-star-list-sort", "--limit", "1"]
-            ),
+            mock.patch.object(sys, "argv", ["git-star-list-sort", "--limit", "1"]),
             mock.patch.object(
                 cli.credentials.subprocess,
                 "run",
@@ -215,9 +213,7 @@ class CredentialResolutionTests(unittest.TestCase):
                 hermetic({credentials.STAR_LISTS_TOKEN_ENV: "github-test-token"}),
                 clear=True,
             ),
-            mock.patch.object(
-                sys, "argv", ["git-star-list-sort", "--limit", "1"]
-            ),
+            mock.patch.object(sys, "argv", ["git-star-list-sort", "--limit", "1"]),
             contextlib.redirect_stderr(io.StringIO()) as stderr,
             self.assertRaises(SystemExit) as caught,
         ):

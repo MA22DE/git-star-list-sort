@@ -132,7 +132,11 @@ def run_cli(
         stack.enter_context(
             mock.patch.dict(
                 os.environ,
-                {"STAR_LISTS_FILE": str(Path(tempfile.gettempdir()) / "no-such-lists.json")},
+                {
+                    "STAR_LISTS_FILE": str(
+                        Path(tempfile.gettempdir()) / "no-such-lists.json"
+                    )
+                },
             )
         )
         stack.enter_context(mock.patch.object(cli, "GitHubAPI", return_value=client))

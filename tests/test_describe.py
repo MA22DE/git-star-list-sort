@@ -318,9 +318,15 @@ class DescribeShimWriterTests(unittest.TestCase):
                 mock.patch.object(
                     sys,
                     "argv",
-                    ["git-star-list-sort-describe", "--describe-lists-output", str(path)],
+                    [
+                        "git-star-list-sort-describe",
+                        "--describe-lists-output",
+                        str(path),
+                    ],
                 ),
-                mock.patch.object(describe, "resolve_github_token", return_value=("t", "s")),
+                mock.patch.object(
+                    describe, "resolve_github_token", return_value=("t", "s")
+                ),
                 mock.patch.object(describe, "GitHubAPI"),
                 mock.patch.object(
                     describe, "paginated_lists", return_value=("page", lists)
