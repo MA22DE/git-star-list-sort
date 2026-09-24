@@ -301,7 +301,10 @@ def fill_missing_descriptions(
         return None, warnings + [f"could not generate descriptions: {error}"]
     for title, reason in failures:
         warnings.append(f"no description for {title!r}: {reason}")
-    document = {"generated_model": model, "lists": generated}
+    # generate_partial keeps only the live Lists, so merge the committed
+    # descriptions back in: a List deleted on GitHub keeps its description,
+    # exactly as the "no longer on GitHub" warning promises above.
+    document = {"generated_model": model, "lists": {**existing, **generated}}
     # Only rewrite the file when the content actually changed, so a run whose
     # generated set is identical never touches it (and a default path beside the
     # checkout is not clobbered for nothing).
@@ -436,9 +439,11 @@ def run() -> None:
         force=args.force,
         evidence=evidence,
     )
+    # Keep descriptions for Lists that are no longer on GitHub: the check above
+    # reports them as kept rather than deleted.
     document = {
         "generated_model": model,
-        "lists": descriptions,
+        "lists": {**existing, **descriptions},
     }
     args.describe_lists_output.parent.mkdir(parents=True, exist_ok=True)
     args.describe_lists_output.write_text(

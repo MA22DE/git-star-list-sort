@@ -110,6 +110,9 @@ def hermetic(environment: dict) -> dict:
     it must be re-added here or these tests would silently use real credentials.
     """
     return {
+        # Blanked before any override: a developer's real key must never make a
+        # test generate descriptions (and write files) through the network.
+        "OPENROUTER_API_KEY": "",
         **environment,
         "GIT_STAR_LIST_SORT_NO_DOTENV": "1",
         # Point the lists file at a path that does not exist so tests never

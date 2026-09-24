@@ -263,5 +263,40 @@ class MissingListTests(unittest.TestCase):
         self.assertEqual([], [name for name in live if not existing.get(name)])
 
 
+class FillMissingDescriptionsTests(unittest.TestCase):
+    """The write path must never drop a committed description."""
+
+    def test_a_list_gone_from_github_keeps_its_committed_description(self):
+        """Regression: generate_partial filters to live names, so the merge
+        back into the document is what keeps vanished Lists' descriptions."""
+        lists = [{"id": "UL_sqlite", "name": "SQLite", "description": None}]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "lists.json"
+            path.write_text(
+                json.dumps(
+                    {"generated_model": "m", "lists": {"Deleted List": "keep me"}}
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(describe, "describe", return_value="fresh"),
+                mock.patch.object(describe, "list_item_details", return_value=[]),
+                mock.patch.object(
+                    describe, "dotenv_values", return_value={"OPENROUTER_API_KEY": "k"}
+                ),
+            ):
+                committed, warnings = describe.fill_missing_descriptions(
+                    mock.Mock(), lists, lists_file=path
+                )
+            document = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            {"Deleted List": "keep me", "SQLite": "fresh"}, document["lists"]
+        )
+        self.assertEqual(document["lists"], committed)
+        self.assertIn("Deleted List", warnings[0])
+        self.assertIn("kept", warnings[0])
+
+
 if __name__ == "__main__":
     unittest.main()

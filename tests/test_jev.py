@@ -14,6 +14,17 @@ from unittest import mock
 from git_star_list_sort import cli as jev
 from tests.helpers import FakeGraphQL, repo
 
+# The unified flow refreshes List descriptions before classifying, so a test run
+# resolves a lists file. Point it at a fixture that matches FakeGraphQL's single
+# live List: nothing is missing, nothing vanished, and no assertion depends on
+# the developer's checkout lists.json.
+LISTS_FIXTURE = Path(tempfile.gettempdir()) / "test-jev-lists.json"
+LISTS_FIXTURE.write_text(
+    json.dumps({"generated_model": "test", "lists": {"Developer Tools": "Tools."}}),
+    encoding="utf-8",
+)
+LISTS_ENV = {"STAR_LISTS_FILE": str(LISTS_FIXTURE)}
+
 
 def response_payload(choice: str = "UL_tools") -> dict:
     return {
@@ -177,6 +188,7 @@ class JevTests(unittest.TestCase):
                     "JEV_API_KEY": "test-key",
                     "STAR_LISTS_TOKEN": "github-test-token",
                     "JEV_ENDPOINT": "https://environment.example.test/v1/systemone",
+                    **LISTS_ENV,
                 },
                 clear=True,
             ),
@@ -266,6 +278,7 @@ class JevTests(unittest.TestCase):
                     "JEV_API_KEY": "test-key",
                     "STAR_LISTS_TOKEN": "github-test-token",
                     "JEV_ENDPOINT": "https://provider.example.test/v1/systemone",
+                    **LISTS_ENV,
                 },
                 clear=True,
             ),
@@ -336,6 +349,7 @@ class JevTests(unittest.TestCase):
                 {
                     "JEV_API_KEY": "test-key",
                     "STAR_LISTS_TOKEN": "github-test-token",
+                    **LISTS_ENV,
                 },
                 clear=True,
             ),
@@ -357,6 +371,7 @@ class JevTests(unittest.TestCase):
                 {
                     "JEV_API_KEY": "test-key",
                     "STAR_LISTS_TOKEN": "github-test-token",
+                    **LISTS_ENV,
                 },
                 clear=True,
             ),

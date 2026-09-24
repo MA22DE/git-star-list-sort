@@ -143,8 +143,12 @@ minutes.
 
 `git-star-list-sort` does everything. Descriptions are refreshed automatically
 before every sort, new Lists included, so the taxonomy never goes stale. Without
-`--apply` nothing is ever written; with `--apply` the tool previews the net-new
-memberships and asks a `y/N` question (default No). Scripts pass `--yes`.
+`--apply` nothing is ever written to GitHub; with `--apply` the tool previews the
+net-new memberships and asks a `y/N` question (default No). Scripts pass `--yes`.
+
+One nuance: generating descriptions writes them to `lists.json` (the local
+criteria file) — that happens whenever Lists are missing descriptions, in every
+mode. GitHub itself is only ever touched by `--apply`.
 
 ```bash
 # sort the newest 100 and write them to GitHub
