@@ -98,12 +98,27 @@ you to set `STAR_LISTS_TOKEN` explicitly.
 Generate descriptions once, whenever your List taxonomy changes:
 
 ```bash
-# reads OPENROUTER_API_KEY from .env (or the environment)
-git-star-list-sort-describe --describe-lists-output lists.json
+# the usual command: report which Lists lack a description and generate only those
+git-star-list-sort-describe --check --describe-lists-output lists.json
 
 # re-generate every description instead of keeping existing ones
 git-star-list-sort-describe --describe-lists-output lists.json --force
 ```
+
+**Run `--check` whenever you add or rename a List.** New Lists have no committed
+description, so without it they fall back to a bare `"Name: "` criterion and
+classify poorly. `--check` needs no API key to report, so it is safe to run just
+to see drift:
+
+```
+needs description: Small Language Models
+needs description: Jev Model Alternatives
+28 Lists, 25 described, 3 missing
+```
+
+It generates only what is missing, keeps your hand edits, and reports a List that
+no longer exists on GitHub rather than silently dropping it. Without `--check`,
+`-describe` also skips every List that already has a description.
 
 The generator does not guess from the List title alone: it reads each List's
 actual members, with their descriptions, topics, and languages, and also names the

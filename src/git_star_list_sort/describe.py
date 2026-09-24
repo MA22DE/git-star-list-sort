@@ -24,7 +24,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .credentials import resolve_github_token
+from .credentials import dotenv_values, load_env_file, resolve_github_token
 from .github_api import (
     GitHubAPI,
     format_evidence,
@@ -62,20 +62,16 @@ PROMPT = (
 )
 
 
-def load_env(path: Path) -> dict[str, str]:
-    """Read a minimal KEY=VALUE ``.env`` file; missing files yield no entries."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return {}
-    values: dict[str, str] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        values[key.strip()] = value.strip().strip("'\"")
-    return values
+def load_env(path: Path | None) -> dict[str, str]:
+    """OpenRouter settings from an explicit file, else the shared discovery.
+
+    Passing no ``--env-file`` falls back to the same ``.env`` search the other
+    commands use (nearest file walking up, then ``~/.config``), so the key does
+    not have to be exported or duplicated into the working directory.
+    """
+    if path is not None:
+        return load_env_file(path)
+    return dotenv_values()
 
 
 def _request_description(
@@ -252,8 +248,10 @@ def run() -> None:
     parser.add_argument(
         "--env-file",
         type=Path,
-        default=Path(".env"),
-        help="File holding OPENROUTER_API_KEY (default: .env)",
+        help=(
+            "Explicit file holding OPENROUTER_API_KEY; by default the same .env "
+            "search as the other commands is used (nearest file, then ~/.config)"
+        ),
     )
     parser.add_argument(
         "--model",
@@ -265,11 +263,20 @@ def run() -> None:
     parser.add_argument(
         "--force", action="store_true", help="Regenerate existing descriptions"
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "Report Lists that are missing a description (including Lists added "
+            "since the file was written) and generate only those; needs no key "
+            "to report"
+        ),
+    )
     args = parser.parse_args()
 
     env = {**load_env(args.env_file), **os.environ}
     api_key = env.get("OPENROUTER_API_KEY", "").strip()
-    if not api_key:
+    if not api_key and not args.check:
         parser.error(f"set OPENROUTER_API_KEY in the environment or in {args.env_file}")
     model = args.model or env.get("OPENROUTER_MODEL", "").strip() or DEFAULT_MODEL
     if model != DEFAULT_MODEL and "/" not in model:
@@ -288,13 +295,50 @@ def run() -> None:
 
         existing = load_descriptions(args.describe_lists_output)
 
+    # Which Lists actually lack a committed description? New Lists appear as their
+    # titles change, so this is the routine maintenance question.
+    live_names = [item["name"] for item in lists]
+    missing = [name for name in live_names if not existing.get(name)]
+    disappeared = sorted(set(existing) - set(live_names))
+
+    if args.check:
+        for name in missing:
+            print(f"  needs description: {name}", file=sys.stderr)
+        for name in disappeared:
+            print(
+                f"  no longer a List on GitHub: {name} (kept in the file)",
+                file=sys.stderr,
+            )
+        print(
+            f"{len(live_names)} Lists, {len(live_names) - len(missing)} described, "
+            f"{len(missing)} missing" + ("; nothing to do" if not missing else ""),
+            file=sys.stderr,
+        )
+        if not missing:
+            return
+        # Without OPENROUTER_API_KEY the check is still useful as a report.
+        if not api_key:
+            print(
+                "Set OPENROUTER_API_KEY to generate the missing descriptions.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    if not missing and not args.force:
+        print(
+            f"All {len(live_names)} Lists already have descriptions; nothing to do.",
+            file=sys.stderr,
+        )
+        return
+
+    targets = [item for item in lists if item["name"] in set(missing)]
     evidence: dict[str, str] = {}
-    for index, item in enumerate(lists, start=1):
+    for index, item in enumerate(targets, start=1):
         details = list_item_details(client, item["id"])
         evidence[item["name"]] = format_evidence(details)
         note = "empty" if not details else f"{len(details)} member(s)"
         print(
-            f"[{index}/{len(lists)}] evidence for {item['name']}: {note}",
+            f"[{index}/{len(targets)}] evidence for {item['name']}: {note}",
             file=sys.stderr,
             flush=True,
         )

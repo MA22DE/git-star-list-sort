@@ -239,5 +239,29 @@ class GeneratePartialTests(unittest.TestCase):
         self.assertEqual([], failures)
 
 
+class MissingListTests(unittest.TestCase):
+    """Lists added on GitHub after the file was written must be detected."""
+
+    def test_missing_titles_are_the_ones_without_a_description(self):
+        live = ["SQLite", "Database tools", "Brand New List"]
+        existing = {"SQLite": "x", "Database tools": "y"}
+        missing = [name for name in live if not existing.get(name)]
+        self.assertEqual(["Brand New List"], missing)
+
+    def test_a_list_gone_from_github_is_reported_not_dropped(self):
+        live = ["SQLite"]
+        existing = {"SQLite": "x", "Deleted List": "y"}
+        disappeared = sorted(set(existing) - set(live))
+        self.assertEqual(["Deleted List"], disappeared)
+        # It stays in the file: the description itself is still valid if the List
+        # comes back, and silently dropping user-visible data would be worse.
+        self.assertIn("Deleted List", existing)
+
+    def test_nothing_missing_means_nothing_to_generate(self):
+        live = ["SQLite", "Database tools"]
+        existing = {"SQLite": "x", "Database tools": "y"}
+        self.assertEqual([], [name for name in live if not existing.get(name)])
+
+
 if __name__ == "__main__":
     unittest.main()
