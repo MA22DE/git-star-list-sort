@@ -12,7 +12,7 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Topic :: Utilities",
 ]
-authors = [{ name = "MA22DE" }]
+authors = [{ name = "M2DE" }]
 dependencies = []
 
 [project.urls]
