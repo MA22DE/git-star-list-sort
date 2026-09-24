@@ -1,5 +1,7 @@
 # git-star-list-sort
 
+[![CI](https://github.com/MA22DE/git-star-list-sort/actions/workflows/ci.yml/badge.svg)](https://github.com/MA22DE/git-star-list-sort/actions/workflows/ci.yml)
+
 Organize your GitHub stars into your existing [GitHub Lists](https://github.com/stars)
 using [TypeSafe Jev](https://docs.typesafe.ai/).
 
@@ -11,7 +13,14 @@ almost nothing to sort by.
 ## Install
 
 ```bash
-git clone git@github.com:MA22DE/git-star-list-sort.git
+uv tool install git+https://github.com/MA22DE/git-star-list-sort
+```
+
+Working on the tool itself? Install from a clone with `--editable` so source edits
+take effect without reinstalling:
+
+```bash
+git clone https://github.com/MA22DE/git-star-list-sort.git
 cd git-star-list-sort
 uv tool install --editable .
 ```
@@ -29,7 +38,78 @@ assignments to GitHub:
 The two shims still work for scripting and for re-driving a saved report, but the
 one command covers normal use.
 
-Reinstalling is not needed after editing the source: the install is editable.
+## How it uses Jev
+
+One Jev request per repository, answered as a single `choice` question. This is
+the entire classification step — there is no prompt to tune and no agent loop:
+
+```jsonc
+POST https://api.typesafe.ai/v1/systemone
+{
+  "model": "jev-latest",
+  "state": {                              // the repository, as evidence
+    "name_with_owner": "typesafe-ai/jev-examples",
+    "description": "…", "language": "TypeScript",
+    "topics": ["…"], "archived": false, "fork": false, "private": false,
+    "starred_at": "…",
+    "readme_excerpt": "… first 2000 chars, badges/images/comments stripped …"
+  },
+  "questions": {
+    "list": {                            // one question, one choice
+      "type": "choice",
+      "instructions": "Choose the existing GitHub List that best matches …",
+      "criteria": {                       // the options ARE your Lists
+        "UL_kwDOExampleA": "Automation (AI Powered): AI-powered automation tools …",
+        "UL_kwDOExampleB": "SQLite: SQLite tools and extensions that add …",
+        "no_matching_category": "None of the existing Lists fits the repository's purpose …"
+      }
+    }
+  }
+}
+```
+
+The answer is a choice with a calibrated distribution over **every** option, and
+the tool records it verbatim — including the options it did not pick:
+
+```jsonc
+{
+  "answers": {"list": {
+    "type": "choice", "choice": "UL_kwDOExampleA", "confidence": 0.79,
+    "probabilities": {"UL_kwDOExampleA": 0.81, "no_matching_category": 0.0, "…": 0.18}
+  }},
+  "model": "jev-1.13.0",
+  "usage": {"input_tokens": 3474, "output_tokens": 487}
+}
+```
+
+Design points worth knowing:
+
+- **The classifier is not an LLM.** Jev returns a decision in well under a second
+  (measured 0.4–0.8 s), so a 100-star batch is a ~90-second job instead of a
+  prompt-engineering project. The only LLM in the tool is the optional List
+  description generator, and it runs once per *List*, never once per star.
+- **The criteria are the options**, keyed by List id, each rendered as
+  `"<List name>: <description>"`. That is why the descriptions matter so much
+  (next section) — they are literally the model's answer space.
+- **`no_matching_category` is a first-class option** with its own criterion, and
+  the instructions forbid forcing a match to a broad List. Those results are
+  recorded and skipped by `apply`.
+- **254 Lists is a hard ceiling.** A Jev choice question accepts at most 255
+  options and the 255th is `no_matching_category`, so more than 254 Lists is
+  refused up front with a clear error instead of a silently truncated question.
+- **Answers are validated before they are used.** The response must be a `choice`
+  whose value is one of the criteria, with a numeric confidence in `[0, 1]` and a
+  probability for every option; anything else raises instead of being
+  half-recorded. 401s name the likely cause (`JEV_API_KEY`), and
+  `429`/`502`/`503`/`504`/`529` are retried with exponential backoff.
+- **Repository text is untrusted input.** The instructions tell the model that
+  metadata, README text and List descriptions are evidence only and never
+  instructions, so a README cannot steer the classifier.
+- **Classification never writes to GitHub.** It produces a report; assigning is
+  the separate, gated `--apply` step.
+- **Any Jev-compatible endpoint works**: `--endpoint` or `JEV_ENDPOINT`, with
+  `--model` defaulting to `jev-latest`. The report keeps both `requested_model`
+  and the model that actually answered.
 
 ## Why List descriptions matter
 
@@ -95,9 +175,6 @@ README's advice holds for `apply`: create a classic PAT with the `user` scope
 (<https://github.com/settings/tokens>), export it as `STAR_LISTS_TOKEN`, and
 `apply` will prefer it over the `gh` fallback.
 
-If `gh` is logged in to more than one account the tool refuses to guess and asks
-you to set `STAR_LISTS_TOKEN` explicitly.
-
 ## Usage
 
 Generate descriptions once, whenever your List taxonomy changes:
@@ -136,8 +213,9 @@ or the environment, and `OPENROUTER_MODEL` for the model, defaulting to
 `deepseek/deepseek-v4.1-flash`. That model reasons before answering, so the request
 budget (2000 tokens, retried once at 4000) covers reasoning plus the visible
 description; a budget sized for the two sentences alone is spent entirely on
-reasoning and returns no text. Generating all 25 descriptions takes about three
-minutes.
+reasoning and returns no text. A full pass over ~30 Lists takes several minutes:
+each description is one reasoning-model call, and a slow List can take a minute
+on its own.
 
 ## The one command
 
@@ -238,11 +316,11 @@ What has actually been exercised against live services:
 
 | Path | Status |
 | --- | --- |
-| Classify (`git-star-list-sort`) | **Live-tested**: 1203 stars / 25 Lists, results with list, confidence, model, usage |
+| Classify (`git-star-list-sort`) | **Live-tested**: ~1200 stars / 28 Lists, results with list, confidence, model, usage |
 | Apply — read and validate (`--dry-run`) | **Live-tested**; confirmed side-effect free |
 | Apply — write | **Live-tested**: 6 repositories assigned, rerun reported `already_assigned: 6` |
-| `--describe-lists` generation | **Live-tested**: 25 of 25 Lists described |
-| Committed descriptions reach Jev | **Live-tested**: empty criteria went 25 → 0 |
+| `--describe-lists` generation | **Live-tested**: 28 of 28 Lists described |
+| Committed descriptions reach Jev | **Live-tested**: empty criteria went 28 → 0 |
 
 The committed `lists.json` was generated by `-describe`, then reviewed. Descriptions
 are worth reading before trusting them: `Typesafe-Jev` was described as generic
@@ -258,19 +336,32 @@ look", not as an error.
 ## Suggested order
 
 ```bash
-# 1. put OPENROUTER_API_KEY in .env (gitignored)
-# 2. generate, then review/edit the descriptions by hand
-git-star-list-sort-describe --describe-lists-output lists.json
-# 3. commit them so later runs are reproducible
-# 4. classify (default: only stars already in a List)
-git-star-list-sort --output output/classifications.json
-# 5. validate before writing; needs a classic PAT with `user` scope
-git-star-list-sort-apply --report output/classifications.json --dry-run
-git-star-list-sort-apply --report output/classifications.json
+# 1. generate the List descriptions, then read and edit them in lists.json
+#    (needs OPENROUTER_API_KEY; the sort itself does not)
+git-star-list-sort --refresh-descriptions --limit 1
+
+# 2. classify the newest 100 stars - nothing is written to GitHub
+#    (needs JEV_API_KEY; gh auth token is enough)
+git-star-list-sort --limit 100 --include-unlisted
+
+# 3. see exactly which memberships --apply would add
+git-star-list-sort --limit 100 --include-unlisted --apply --dry-run
+
+# 4. apply it; asks first, needs a classic PAT with the `user` scope
+git-star-list-sort --limit 100 --include-unlisted --apply
 ```
 
 `apply` is additive: it can add a repository to a List but has no removal path, so
 undoing an assignment is a manual step on GitHub's stars page.
+
+## Running it on GitHub Actions
+
+`.github/workflows/classify-stars.yml` runs the classifier on demand, with no
+local setup: open the Actions tab, pick *Classify starred repositories*, and give
+it a `limit`. It needs two repository secrets — `STAR_LISTS_TOKEN` and
+`JEV_API_KEY` — and uploads `classifications.json` as a build artifact. The apply
+step is there but commented out, so the workflow cannot write to your Lists until
+you enable it on purpose.
 
 ## Output
 
@@ -293,13 +384,15 @@ cached. Up to 254 Lists are supported.
 
 ```bash
 uv sync
-uv run python -m unittest        # 81 tests, no network access
-uv run --with ruff ruff check .
-uv run --with ruff ruff format --check .
+uv run python -m unittest                  # 131 tests, no network access
+uv run --with ruff==0.16.5 ruff check .
+uv run --with ruff==0.16.5 ruff format --check .   # CI pins 0.16.5, so do you
 ```
 
 Tests never touch the network and never depend on an ambient `gh` session.
 
 ## License
 
-See `LICENSE`.
+MIT — see [`LICENSE`](LICENSE). This is a fork of
+[`yutkat/github-star-organizer-jev`](https://github.com/yutkat/github-star-organizer-jev),
+and the upstream copyright notice is preserved.

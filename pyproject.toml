@@ -1,10 +1,24 @@
 [project]
 name = "git-star-list-sort"
 version = "0.1.0"
-description = "Classify GitHub stars into existing Lists with Jev"
+description = "Sort your GitHub stars into your existing GitHub Lists with TypeSafe Jev"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["github", "stars", "github-lists", "jev", "typesafe", "classification", "cli"]
+classifiers = [
+  "Environment :: Console",
+  "Programming Language :: Python :: 3",
+  "Topic :: Utilities",
+]
+authors = [{ name = "MA22DE" }]
 dependencies = []
+
+[project.urls]
+Repository = "https://github.com/MA22DE/git-star-list-sort"
+Issues = "https://github.com/MA22DE/git-star-list-sort/issues"
+Upstream = "https://github.com/yutkat/github-star-organizer-jev"
 
 [project.scripts]
 git-star-list-sort = "git_star_list_sort.cli:main"
