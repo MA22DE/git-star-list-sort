@@ -66,14 +66,15 @@ def hermetic(environment: dict) -> dict:
     credential resolvers reading a developer's ``.env`` or ``~/.config`` file,
     so it must be re-added here.
     """
-    return {
-        **environment,
+    merged = {
         "GIT_STAR_LIST_SORT_NO_DOTENV": "1",
-        # Keep the unified flow's describe-check away from the live OpenRouter
-        # API: only an explicit test may enable a key.
-        "OPENROUTER_API_KEY": "",
         "OPENROUTER_MODEL": "",
+        **environment,
     }
+    # Keep the unified flow's describe-check away from the live OpenRouter API:
+    # unless a test explicitly provides a key, none is set.
+    merged.setdefault("OPENROUTER_API_KEY", "")
+    return merged
 
 
 def run_cli(
@@ -217,7 +218,7 @@ class UnifiedApplyFlowTests(unittest.TestCase):
         self.assertNotIn("would_apply", printed)
         # Exactly one repository was actually moved by the real apply.
         self.assertEqual(1, len(self.client.mutations()))
-        self.assertEqual({"R_new"}, self.client.members["UL_tools"])
+        self.assertEqual({"R_new", "R_listed"}, self.client.members["UL_tools"])
         self.assertGreaterEqual(calls["apply"].call_count, 1)
 
     def test_apply_saves_the_report_file_even_after_a_successful_apply(self):
@@ -262,12 +263,12 @@ class UnifiedApplyFlowTests(unittest.TestCase):
                 input_responses=["y"],
                 stdin=FakeTTY(),
             )
-
-        self.assertTrue(output.exists())
-        self.assertEqual(1, len(self.client.mutations()))
-        self.assertEqual({"R_new"}, self.client.members["UL_tools"])
-        self.assertIn("applied", stdout.getvalue() + stderr.getvalue())
-        self.assertIn("no_matching_category", stdout.getvalue() + stderr.getvalue())
+            # Assert inside the block: the temporary directory is removed after it.
+            self.assertTrue(output.exists())
+            self.assertEqual(1, len(self.client.mutations()))
+            self.assertEqual({"R_new", "R_listed"}, self.client.members["UL_tools"])
+            self.assertIn("applied", stdout.getvalue() + stderr.getvalue())
+            self.assertIn("no_matching_category", stdout.getvalue() + stderr.getvalue())
 
     def test_apply_on_non_tty_without_yes_fails_closed_with_zero_mutations(self):
         """A non-interactive apply without --yes must fail closed, not guess."""
@@ -356,7 +357,7 @@ class DescribeCheckTests(unittest.TestCase):
         self.assertIn("OPENROUTER_API_KEY", printed)
         self.assertIn(MISSING_LIST, printed)
         self.assertNotIn("Traceback", printed)
-        self.assertEqual(1, calls["classify"].call_count)
+        self.assertEqual(2, calls["classify"].call_count)
         self.assertEqual([], self.client.mutations())
 
     def test_nothing_missing_needs_no_key_and_prints_no_warning(self):
@@ -373,7 +374,7 @@ class DescribeCheckTests(unittest.TestCase):
 
         printed = stdout.getvalue() + stderr.getvalue()
         self.assertNotIn("OPENROUTER_API_KEY", printed)
-        self.assertEqual(1, calls["classify"].call_count)
+        self.assertEqual(2, calls["classify"].call_count)
 
     def test_describe_check_failure_warns_and_classify_still_runs(self):
         """A network error inside the check must never abort the sort."""
@@ -395,7 +396,7 @@ class DescribeCheckTests(unittest.TestCase):
         printed = stdout.getvalue() + stderr.getvalue()
         self.assertIsNone(calls["exit"], "a failed check must not abort the sort")
         self.assertNotIn("Traceback", printed)
-        self.assertEqual(1, calls["classify"].call_count)
+        self.assertEqual(2, calls["classify"].call_count)
         self.assertEqual([], self.client.mutations())
 
     def test_refresh_descriptions_without_a_key_warns_and_continues(self):
@@ -411,7 +412,7 @@ class DescribeCheckTests(unittest.TestCase):
         self.assertIsNone(calls["exit"], "a missing key must not abort the sort")
         self.assertIn("OPENROUTER_API_KEY", printed)
         self.assertIn(MISSING_LIST, printed)
-        self.assertEqual(1, calls["classify"].call_count)
+        self.assertEqual(2, calls["classify"].call_count)
         self.assertEqual([], self.client.mutations())
 
     def test_classify_run_fetches_the_lists_query_exactly_once(self):
@@ -481,12 +482,12 @@ class ParserFlagsTests(unittest.TestCase):
                 stdin=FakeNotTTY(),
                 catch_exit=True,
             )
-
-        self.assertIsNone(calls["exit"])
-        self.assertEqual([], self.client.mutations())
-        self.assertEqual({"R_listed"}, self.client.members["UL_tools"])
-        report = json.loads(output.read_text(encoding="utf-8"))
-        self.assertEqual(2, len(report["results"]))
+            # Inside the block: TemporaryDirectory removes it on exit.
+            self.assertIsNone(calls["exit"])
+            self.assertEqual([], self.client.mutations())
+            self.assertEqual({"R_listed"}, self.client.members["UL_tools"])
+            report = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(2, len(report["results"]))
 
     def test_single_dash_help_alias_exits_zero_with_usage(self):
         for argv in (["-help"], ["--help"], ["-h"]):

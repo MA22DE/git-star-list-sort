@@ -72,7 +72,7 @@ class EntryPointTests(unittest.TestCase):
                         )
                         env[missing] = ""
                         result = subprocess.run(
-                            command,
+                            [*command, "--limit", "1"],
                             cwd=directory,
                             env=env,
                             capture_output=True,
@@ -90,7 +90,7 @@ class EntryPointTests(unittest.TestCase):
                 with self.subTest(command=command):
                     # Jev is checked first, so provide one to reach the GitHub check.
                     result = subprocess.run(
-                        command,
+                        [*command, "--limit", "1"],
                         cwd=directory,
                         env=self.hermetic_env(PATH=EMPTY_PATH, JEV_API_KEY="test-key"),
                         capture_output=True,
@@ -111,7 +111,7 @@ class EntryPointTests(unittest.TestCase):
             for command in self.commands():
                 with self.subTest(command=command):
                     result = subprocess.run(
-                        command,
+                        [*command, "--limit", "1"],
                         cwd=directory,
                         env=self.hermetic_env(PATH=EMPTY_PATH),
                         capture_output=True,

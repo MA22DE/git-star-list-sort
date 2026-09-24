@@ -15,8 +15,10 @@ from html import unescape
 from pathlib import Path
 from typing import Any
 
+from . import apply as apply_module
 from . import credentials
-from .descriptions import build_criteria, load_descriptions
+from .describe import fill_missing_descriptions
+from .descriptions import build_criteria
 from .github_api import (
     GitHubAPI,
     GraphQLExecutor,
@@ -26,6 +28,9 @@ from .github_api import (
 )
 
 DEFAULT_JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
+
+
+DEFAULT_REPORT_PATH = Path("classifications.json")
 
 
 def default_lists_file() -> Path:
@@ -198,8 +203,69 @@ def api_endpoint(value: str) -> str:
     return value
 
 
+def format_apply_preview(summary: dict[str, Any]) -> list[str]:
+    """Per-List counts of the memberships an apply would ADD (net new).
+
+    ``summary`` is the dict ``apply_report(dry_run=True)`` returned, so the
+    preview is computed by the same code that will execute, not a parallel
+    implementation that could drift.
+    """
+    per_list = summary.get("per_list") or {}
+    return [
+        f"{count:4}  {name}"
+        for name, count in sorted(
+            per_list.items(), key=lambda item: (-item[1], item[0])
+        )
+    ]
+
+
+GUIDE = """
+Sort your GitHub stars into your existing Lists.
+
+  The usual run - sort the newest 100 and write them to GitHub:
+      git-star-list-sort --limit 100 --include-unlisted --apply
+
+  Report only (never changes GitHub):
+      git-star-list-sort --limit 100 --include-unlisted
+
+  Preview what --apply would change, without writing:
+      git-star-list-sort --limit 100 --include-unlisted --apply --dry-run
+
+  Rebuild List descriptions after adding or renaming Lists:
+      git-star-list-sort --refresh-descriptions --limit 1
+
+List descriptions are refreshed automatically before every sort, so new Lists are
+usable immediately. Without --apply nothing is ever written: you get a report at
+--output (default stdout) and GitHub is untouched. --apply asks a y/N question
+before writing, so it is safe to run interactively; use --yes for scripts.
+
+  --limit N              newest N stars only (default 0 = all 1203)
+  --include-unlisted     also sort stars that are not in any List yet
+  --apply                write the assignments to GitHub
+  --dry-run              with --apply: preview only, write nothing
+  --yes                  with --apply: skip the y/N question
+  --refresh-descriptions regenerate every List description, not just missing ones
+  --output PATH          where the report goes (lists.json sits beside it)
+  -h, -help, --help      this guide
+
+GitHub credentials come from a .env (nearest one walking up from here, then
+~/.config/git-star-list-sort/.env) or the environment: STAR_LISTS_TOKEN must be a
+classic PAT with the `user` scope for --apply; classifying works with `gh` alone.
+"""
+
+
 def parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(description=__doc__)
+    result = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="Run with no arguments for a short guide.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    result.add_argument(
+        "-help",
+        dest="help_alias",
+        action="help",
+        help="Show this help message and exit",
+    )
     result.add_argument(
         "--limit",
         type=int,
@@ -230,6 +296,30 @@ def parser() -> argparse.ArgumentParser:
         ),
     )
     result.add_argument(
+        "--apply",
+        action="store_true",
+        help=(
+            "Write the assignments to GitHub after classifying. Without it the "
+            "run is report-only and never changes anything. Asks a y/N question "
+            "first unless --yes is given"
+        ),
+    )
+    result.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With --apply: show what would change and write nothing",
+    )
+    result.add_argument(
+        "--yes",
+        action="store_true",
+        help="With --apply: apply without asking (for scripts); the preview is still printed",
+    )
+    result.add_argument(
+        "--refresh-descriptions",
+        action="store_true",
+        help="Regenerate every List description instead of only missing ones",
+    )
+    result.add_argument(
         "--lists-file",
         "--describe-lists",
         dest="lists_file",
@@ -246,6 +336,11 @@ def parser() -> argparse.ArgumentParser:
 def run() -> None:
     argument_parser = parser()
     args = argument_parser.parse_args()
+    # No arguments at all is far more likely to be a mistake than an intent to
+    # classify every star, so it explains the tool instead of running for an hour.
+    if not sys.argv[1:]:
+        print(GUIDE)
+        sys.exit(0)
     if args.limit < 0:
         argument_parser.error("--limit must be zero or greater")
     try:
@@ -270,6 +365,22 @@ def run() -> None:
             "Classification supports at most 254 Lists plus no matching category"
         )
 
+    # Keep Lists fresh before classifying: a List added on GitHub after the file
+    # was written would otherwise classify against a bare name. A sort must not
+    # become impossible when the description generator is unavailable, so any
+    # failure here is a warning, never an error.
+    try:
+        committed, describe_warnings = fill_missing_descriptions(
+            client,
+            lists,
+            lists_file=args.lists_file,
+            force=args.refresh_descriptions,
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        committed, describe_warnings = None, [str(error)]
+    for warning in describe_warnings:
+        log_progress(f"Note: {warning}")
+
     selected, starred_total = fetch_stars(client, args.limit)
     unlisted_skipped = 0
     if not args.include_unlisted:
@@ -293,7 +404,7 @@ def run() -> None:
         selected = [
             repository for repository in selected if repository["id"] in listed_ids
         ]
-    criteria = build_criteria(lists, load_descriptions(args.lists_file))
+    criteria = build_criteria(lists, committed or {})
     criteria[NO_CATEGORY] = (
         "None of the existing Lists fits the repository's purpose, or the available "
         "metadata and README excerpt are insufficient to choose a category."
@@ -340,6 +451,61 @@ def run() -> None:
     else:
         json.dump(report, sys.stdout, ensure_ascii=False, indent=2)
         print()
+
+    if not args.apply:
+        return
+
+    # The report is the only artifact that can re-drive a half-finished apply, so
+    # it is written before any mutation. Without --output it goes to a default
+    # path rather than being lost in stdout.
+    if args.output:
+        report_path = args.output
+    else:
+        report_path = DEFAULT_REPORT_PATH
+        write_json(report_path, report)
+
+    try:
+        preview = apply_module.apply_report(GitHubAPI(token), report, dry_run=True)
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        raise RuntimeError(f"cannot apply this report: {error}") from None
+    if preview.get("would_apply", 0) == 0:
+        log_progress(
+            "Nothing to apply: every classified repository is already in its List "
+            f"({preview.get('already_assigned', 0)} already assigned, "
+            f"{preview.get('no_matching_category', 0)} with no matching category)."
+        )
+        return
+    log_progress(
+        f"Applying would add {preview['would_apply']} memberships "
+        f"({preview.get('already_assigned', 0)} already assigned, "
+        f"{preview.get('no_matching_category', 0)} skipped: no matching category)."
+    )
+    for line in format_apply_preview(preview):
+        log_progress(f"  {line}")
+    if args.dry_run:
+        log_progress("Dry run: nothing was written.")
+        return
+    if not sys.stdin.isatty():
+        if not args.yes:
+            # Fail closed: a script that forgot --yes must never mutate.
+            log_progress(
+                "Refusing to apply without confirmation: re-run with --yes to "
+                "apply non-interactively."
+            )
+            sys.exit(1)
+    elif not args.yes:
+        try:
+            answer = input("Apply these changes to your GitHub Lists? [y/N] ")
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer.strip().casefold() not in {"y", "yes"}:
+            log_progress(
+                f"Aborted; nothing was changed. The report is saved at {report_path}."
+            )
+            return
+    summary = apply_module.apply_report(GitHubAPI(token), report, dry_run=False)
+    # The executed summary itself, so the result is machine-checkable.
+    log_progress(json.dumps(summary, sort_keys=True))
 
 
 def main() -> None:

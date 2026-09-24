@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +80,8 @@ def apply_report(
         raise ValueError(f"Lists no longer exist: {sorted(missing)}")
 
     memberships: dict[str, set[str]] = {}
+    list_names = {item["id"]: item["name"] for item in current_lists}
+    per_list: Counter[str] = Counter()
     if targets:
         for list_id, repository_ids in list_memberships(
             client, sorted(current_ids)
@@ -116,10 +119,13 @@ def apply_report(
                     f"GitHub did not confirm all List assignments for {repository_id}"
                 )
         changed += 1
+        if list_id in list_names:
+            per_list[list_names[list_id]] += 1
     return {
         "would_apply" if dry_run else "applied": changed,
         "already_assigned": already_assigned,
         "no_matching_category": unmatched,
+        "per_list": dict(per_list),
     }
 
 

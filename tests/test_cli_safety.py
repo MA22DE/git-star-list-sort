@@ -180,7 +180,9 @@ class CredentialResolutionTests(unittest.TestCase):
                 hermetic({credentials.JEV_API_KEY_ENV: "jev-test-key"}),
                 clear=True,
             ),
-            mock.patch.object(sys, "argv", ["git-star-list-sort"]),
+            mock.patch.object(
+                sys, "argv", ["git-star-list-sort", "--limit", "1"]
+            ),
             mock.patch.object(
                 cli.credentials.subprocess,
                 "run",
@@ -203,7 +205,9 @@ class CredentialResolutionTests(unittest.TestCase):
                 hermetic({credentials.STAR_LISTS_TOKEN_ENV: "github-test-token"}),
                 clear=True,
             ),
-            mock.patch.object(sys, "argv", ["git-star-list-sort"]),
+            mock.patch.object(
+                sys, "argv", ["git-star-list-sort", "--limit", "1"]
+            ),
             contextlib.redirect_stderr(io.StringIO()) as stderr,
             self.assertRaises(SystemExit) as caught,
         ):
@@ -217,7 +221,7 @@ class CredentialResolutionTests(unittest.TestCase):
 class ReportOnlyDefaultTests(unittest.TestCase):
     def test_default_classifies_only_listed_repositories_and_reports_skips(self):
         client = FakeOrganizationAPI()
-        stdout, stderr, classify = run_cli([], client)
+        stdout, stderr, classify = run_cli(["--limit", "0"], client)
 
         report = json.loads(stdout.getvalue())
         self.assertEqual(
@@ -242,7 +246,7 @@ class ReportOnlyDefaultTests(unittest.TestCase):
         # The notice must make a near-empty run obvious: "1 classified" out of a
         # 100-star batch explains why the report is tiny.
         client = FakeOrganizationAPI()
-        _, stderr, _ = run_cli([], client)
+        _, stderr, _ = run_cli(["--limit", "0"], client)
 
         self.assertIn("1 classified", stderr.getvalue())
 
@@ -253,7 +257,7 @@ class ReportOnlyDefaultTests(unittest.TestCase):
         client.star_edges = [
             {"starredAt": "2026-01-02T00:00:00Z", "node": repo("R_x", "x/tool")}
         ]
-        stdout, stderr, classify = run_cli([], client)
+        stdout, stderr, classify = run_cli(["--limit", "0"], client)
 
         self.assertEqual([], json.loads(stdout.getvalue())["results"])
         self.assertEqual(0, classify.call_count)
@@ -291,7 +295,7 @@ class ReportOnlyDefaultTests(unittest.TestCase):
 
     def test_classification_alone_issues_no_mutation(self):
         client = FakeOrganizationAPI()
-        run_cli([], client)
+        run_cli(["--limit", "0"], client)
 
         self.assertEqual([], client.mutations())
         self.assertTrue(
@@ -308,7 +312,7 @@ class ReportOnlyDefaultTests(unittest.TestCase):
     def test_skip_notice_is_absent_when_nothing_was_skipped(self):
         client = FakeOrganizationAPI()
         client.members["UL_tools"].update({"R_new", "R_listed"})
-        stdout, stderr, classify = run_cli([], client)
+        stdout, stderr, classify = run_cli(["--limit", "0"], client)
 
         self.assertEqual(2, classify.call_count)
         self.assertEqual(0, json.loads(stdout.getvalue())["unlisted_skipped"])
@@ -317,7 +321,7 @@ class ReportOnlyDefaultTests(unittest.TestCase):
     def test_all_stars_unlisted_still_reports_the_skip_loudly(self):
         client = FakeOrganizationAPI()
         client.members["UL_tools"] = set()
-        stdout, stderr, classify = run_cli([], client)
+        stdout, stderr, classify = run_cli(["--limit", "0"], client)
 
         self.assertEqual([], json.loads(stdout.getvalue())["results"])
         self.assertEqual(2, json.loads(stdout.getvalue())["unlisted_skipped"])
@@ -339,7 +343,10 @@ class DescribeListsTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            _, _, classify = run_cli(["--describe-lists", str(path)], client)
+            _, _, classify = run_cli(
+                ["--describe-lists", str(path), "--limit", "1", "--include-unlisted"],
+                client,
+            )
 
         criteria = classify.call_args.args[1]
         self.assertEqual("Developer Tools: Committed tools", criteria["UL_tools"])
@@ -348,7 +355,10 @@ class DescribeListsTests(unittest.TestCase):
         client = FakeOrganizationAPI()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "absent.json"
-            _, _, classify = run_cli(["--describe-lists", str(path)], client)
+            _, _, classify = run_cli(
+                ["--describe-lists", str(path), "--limit", "1", "--include-unlisted"],
+                client,
+            )
 
         criteria = classify.call_args.args[1]
         self.assertEqual("Developer Tools: Tools", criteria["UL_tools"])

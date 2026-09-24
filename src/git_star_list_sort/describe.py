@@ -25,8 +25,10 @@ from pathlib import Path
 from typing import Any
 
 from .credentials import dotenv_values, load_env_file, resolve_github_token
+from .descriptions import load_descriptions
 from .github_api import (
     GitHubAPI,
+    GraphQLExecutor,
     format_evidence,
     list_item_details,
     paginated_lists,
@@ -233,6 +235,89 @@ def generate_partial(
         print(f"[{index}/{len(titles)}] {title}: {text}", file=sys.stderr, flush=True)
     ordered = {title: descriptions[title] for title in titles if title in descriptions}
     return ordered, failures
+
+
+def fill_missing_descriptions(
+    client: GraphQLExecutor,
+    lists: list[dict[str, Any]],
+    *,
+    lists_file: Path,
+    force: bool = False,
+) -> tuple[dict[str, str] | None, list[str]]:
+    """Describe Lists that lack a committed description, in place.
+
+    Returns ``(descriptions_to_use, warnings)``. Descriptions are always read
+    back from ``lists_file`` so the sort uses exactly what was written, and the
+    file stays the single source of truth. ``None`` means the caller should fall
+    back to live GitHub descriptions (or bare names), which happens when there is
+    nothing to do, or when the OpenRouter key is absent or the call failed: a
+    sort must not become impossible because the description generator is
+    unavailable.
+    """
+    existing = load_descriptions(lists_file)
+    live_names = [item["name"] for item in lists]
+    missing = [name for name in live_names if not existing.get(name)]
+    disappeared = sorted(set(existing) - set(live_names))
+    warnings: list[str] = []
+    for name in disappeared:
+        warnings.append(
+            f"List no longer on GitHub: {name} (its committed description is kept)"
+        )
+    if not missing and not force:
+        # Nothing to generate, but the committed descriptions are still the ones
+        # to classify with (they outrank the live GitHub description).
+        return existing, warnings
+    env = dotenv_values()
+    api_key = (
+        os.environ.get("OPENROUTER_API_KEY", "").strip()
+        or env.get("OPENROUTER_API_KEY", "").strip()
+    )
+    if not api_key:
+        return None, warnings + [
+            f"{len(missing)} List(s) have no committed descriptions: "
+            + ", ".join(missing)
+            + ". Set OPENROUTER_API_KEY to generate descriptions for them."
+        ]
+    model = (
+        os.environ.get("OPENROUTER_MODEL", "").strip()
+        or env.get("OPENROUTER_MODEL", "").strip()
+        or DEFAULT_MODEL
+    )
+    evidence: dict[str, str] = {}
+    targets = [item for item in lists if item["name"] in set(missing)]
+    for item in targets:
+        details = list_item_details(client, item["id"])
+        evidence[item["name"]] = format_evidence(details)
+    try:
+        generated, failures = generate_partial(
+            lists,
+            api_key,
+            model,
+            existing=existing,
+            force=force,
+            evidence=evidence,
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        return None, warnings + [f"could not generate descriptions: {error}"]
+    for title, reason in failures:
+        warnings.append(f"no description for {title!r}: {reason}")
+    document = {"generated_model": model, "lists": generated}
+    # Only rewrite the file when the content actually changed, so a run whose
+    # generated set is identical never touches it (and a default path beside the
+    # checkout is not clobbered for nothing).
+    if lists_file.is_file():
+        try:
+            current = json.loads(lists_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            current = None
+        if current == document:
+            return load_descriptions(lists_file), warnings
+    lists_file.parent.mkdir(parents=True, exist_ok=True)
+    lists_file.write_text(
+        json.dumps(document, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return load_descriptions(lists_file), warnings
 
 
 def run() -> None:

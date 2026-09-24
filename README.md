@@ -16,13 +16,18 @@ cd git-star-list-sort
 uv tool install --editable .
 ```
 
-This installs three commands onto your `PATH` (via `~/.local/bin`):
+This installs one command onto your `PATH` (via `~/.local/bin`) that does the
+whole job — refresh List descriptions, classify stars, and optionally apply the
+assignments to GitHub:
 
 | Command | Purpose |
 | --- | --- |
-| `git-star-list-sort` | Classify stars into Lists and write a JSON report |
-| `git-star-list-sort-apply` | Apply a report to GitHub Lists |
-| `git-star-list-sort-describe` | Generate List descriptions with an LLM |
+| `git-star-list-sort` | Everything: refresh descriptions, classify, and `--apply` to write |
+| `git-star-list-sort-apply` | Deprecated shim: apply a saved report |
+| `git-star-list-sort-describe` | Deprecated shim: regenerate descriptions (`--force`, `--env-file`) |
+
+The two shims still work for scripting and for re-driving a saved report, but the
+one command covers normal use.
 
 Reinstalling is not needed after editing the source: the install is editable.
 
@@ -134,9 +139,33 @@ description; a budget sized for the two sentences alone is spent entirely on
 reasoning and returns no text. Generating all 25 descriptions takes about three
 minutes.
 
-Classify. **By default only stars that are already in at least one List are
-classified**, so a mistake can only change *which* List a repository is in — it
-can never file a previously unsorted star:
+## The one command
+
+`git-star-list-sort` does everything. Descriptions are refreshed automatically
+before every sort, new Lists included, so the taxonomy never goes stale. Without
+`--apply` nothing is ever written; with `--apply` the tool previews the net-new
+memberships and asks a `y/N` question (default No). Scripts pass `--yes`.
+
+```bash
+# sort the newest 100 and write them to GitHub
+git-star-list-sort --limit 100 --include-unlisted --apply
+
+# report only (never changes GitHub)
+git-star-list-sort --limit 100 --include-unlisted
+
+# preview what --apply would change, without writing
+git-star-list-sort --limit 100 --include-unlisted --apply --dry-run
+
+# rebuild List descriptions after adding or renaming Lists
+git-star-list-sort --refresh-descriptions --limit 1
+```
+
+Running the command with no arguments prints this guide instead of starting a
+long run. `-h`, `-help` and `--help` all show the option reference.
+
+**By default only stars that are already in at least one List are classified**,
+so a mistake can only change *which* List a repository is in — it can never file
+a previously unsorted star:
 
 ```bash
 git-star-list-sort --output output/classifications.json
@@ -180,17 +209,24 @@ pass --include-unlisted to classify them too
 
 The report records `unlisted_skipped` so a scripted run can detect it too.
 
-Apply. `apply` is never run automatically; it needs an explicit report and
-validates first with `--dry-run`:
+Apply. With `--apply`, the tool previews the net-new memberships per List, then
+asks `y/N` (default No) unless `--yes` is given. A non-interactive run without
+`--yes` refuses to write, so a script that forgot the flag cannot mutate anything.
+`--dry-run` shows the preview and stops.
 
 ```bash
-git-star-list-sort-apply --report output/classifications.json --dry-run
-git-star-list-sort-apply --report output/classifications.json
+git-star-list-sort --limit 100 --include-unlisted --apply --dry-run
+git-star-list-sort --limit 100 --include-unlisted --apply
+git-star-list-sort --limit 100 --include-unlisted --apply --yes   # scripts
 ```
+
+The report is always written (default `classifications.json` when `--output` is
+absent), so a half-finished apply can be re-driven with the deprecated
+`git-star-list-sort-apply --report` shim.
 
 Applying is **additive**: it reads current memberships, adds the assigned List,
 and never removes a repository from a List. Lists are never created or deleted.
-`No matching category` results are skipped.
+`No matching category` results are skipped. A rerun is a no-op.
 
 ## Validation status
 

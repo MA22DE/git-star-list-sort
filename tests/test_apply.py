@@ -87,7 +87,13 @@ class ApplyTests(unittest.TestCase):
         summary = apply.apply_report(client, report())
 
         self.assertEqual(
-            {"applied": 1, "already_assigned": 1, "no_matching_category": 1}, summary
+            {
+                "applied": 1,
+                "already_assigned": 1,
+                "no_matching_category": 1,
+                "per_list": {"Developer Tools": 1},
+            },
+            summary,
         )
         self.assertEqual(
             [{"input": {"itemId": "R_new", "listIds": ["UL_other", "UL_tools"]}}],
@@ -104,7 +110,13 @@ class ApplyTests(unittest.TestCase):
         summary = apply.apply_report(client, report())
 
         self.assertEqual(
-            {"applied": 0, "already_assigned": 2, "no_matching_category": 1}, summary
+            {
+                "applied": 0,
+                "already_assigned": 2,
+                "no_matching_category": 1,
+                "per_list": {},
+            },
+            summary,
         )
         self.assertEqual([], client.mutations())
 
@@ -130,7 +142,12 @@ class ApplyTests(unittest.TestCase):
         summary = apply.apply_report(client, report(), dry_run=True)
 
         self.assertEqual(
-            {"would_apply": 1, "already_assigned": 1, "no_matching_category": 1},
+            {
+                "would_apply": 1,
+                "already_assigned": 1,
+                "no_matching_category": 1,
+                "per_list": {"Developer Tools": 1},
+            },
             summary,
         )
         self.assertEqual(original, client.items)

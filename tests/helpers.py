@@ -80,6 +80,18 @@ class FakeGraphQL:
                     }
                 }
             }
+        if query == LIST_ITEMS_DETAIL_QUERY:
+            # Served empty: enough for callers that only need the shape, since a
+            # non-empty member list only affects description generation.
+            repository_ids = self.list_items.get(variables["id"], [])
+            return {
+                "node": {
+                    "items": {
+                        "nodes": [{"id": item_id} for item_id in repository_ids],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    }
+                }
+            }
         if query == LIST_ITEMS_QUERY:
             repository_ids = self.list_items.get(variables["id"], [])
             return {
